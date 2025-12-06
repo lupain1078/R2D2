@@ -325,7 +325,7 @@ def main_app():
         if search_q: 
             view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-        # [수정] TypeError 해결 (날짜 안전 비교)
+        # [수정] TypeError 및 가시성 해결
         def highlight_rows(row):
             today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
             try:
@@ -561,11 +561,21 @@ def main_app():
         if os.path.exists(LOG_FILE_NAME):
             log_df = pd.read_csv(LOG_FILE_NAME)
             log_df = log_df.iloc[::-1] # 최신순
+            
+            # [수정] 체크박스 너비 조절
             if user_role == 'admin':
                 st.warning("⚠️ 관리자 권한: 내역 삭제 가능")
                 if '선택' not in log_df.columns: log_df.insert(0, "선택", False)
                 if st.checkbox("✅ 전체 선택"): log_df['선택'] = True
-                edited_df = st.data_editor(log_df, hide_index=True, use_container_width=True)
+                
+                edited_df = st.data_editor(
+                    log_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "선택": st.column_config.CheckboxColumn("선택", width="small") # width="small" added
+                    }
+                )
                 if st.button("선택한 내역 영구 삭제"):
                     remaining_df = edited_df[edited_df['선택'] == False].drop(columns=['선택'])
                     remaining_df.to_csv(LOG_FILE_NAME, index=False); st.success("삭제 완료"); st.rerun()
@@ -574,7 +584,7 @@ def main_app():
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # [수정] 7. 출고증 보관함 (UI 개선: 버튼을 목록 안에 배치)
+    # 7. 출고증 보관함 (UI 개선: 버튼을 목록 안에 배치)
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
         
@@ -588,12 +598,12 @@ def main_app():
                 st.write("#### ⚠️ 관리자 삭제 모드")
                 if '선택' not in hist_df.columns: hist_df.insert(0, '선택', False)
                 
-                # 삭제용 에디터
+                # 삭제용 에디터 [수정] 체크박스 너비 조절
                 edited_del = st.data_editor(
                     hist_df[['선택', 'site_names', 'writer', 'created_at', 'ticket_id', 'file_path']], 
                     column_config={
                         "ticket_id": None, "file_path": None, # 숨김
-                        "선택": st.column_config.CheckboxColumn("삭제", default=False)
+                        "선택": st.column_config.CheckboxColumn("삭제", default=False, width="small") # width="small" added
                     },
                     hide_index=True, use_container_width=True, key="del_editor"
                 )
