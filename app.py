@@ -198,18 +198,10 @@ def main_app():
                     st.success("데이터 로드 완료!"); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
             
-            # [수정] 백업 다운로드 시 ID 제외하고 장비 목록만 다운로드
             if not st.session_state.df.empty:
-                # ID 컬럼 제거한 데이터프레임 생성
                 clean_df = st.session_state.df.drop(columns=['ID'], errors='ignore')
                 csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
-                
-                st.download_button(
-                    label="💾 장비 목록 백업 다운로드 (ID 제외)",
-                    data=csv_data,
-                    file_name="equipment_list.csv",
-                    mime="text/csv"
-                )
+                st.download_button("💾 장비 목록 백업 (ID 제외)", csv_data, "equipment_list.csv", "text/csv")
 
     # --- 메인 화면 ---
     col_h1, col_h2 = st.columns([8, 2])
@@ -266,7 +258,6 @@ def main_app():
             elif status == '수리 중': return ['background-color: #ffccbc'] * len(row)
             return [''] * len(row)
 
-        # [수정] ID 컬럼 숨기고 출력
         display_df = view_df.drop(columns=['ID'], errors='ignore')
         st.dataframe(display_df.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
 
@@ -312,7 +303,6 @@ def main_app():
                             log_transaction("외부대여", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df); st.success("완료"); st.rerun()
         st.write("---")
         st.write("#### 📋 현재 대여 중 목록"); cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
-        # [수정] ID 숨김
         if not cur_rent.empty: st.dataframe(cur_rent[['이름', '대여자', '수량', '반납예정일']], use_container_width=True)
 
     # 3. 현장 출고
@@ -348,7 +338,6 @@ def main_app():
                 if 'last_ticket' in st.session_state: st.download_button("📄 출고증 다운로드", st.session_state.last_ticket, "dispatch.xlsx")
         st.write("---")
         st.write("#### 📋 현장별 현황"); cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
-        # [수정] ID 숨김
         if not cur_disp.empty:
             sites = ["전체보기"] + list(cur_disp['대여자'].unique())
             s_site = st.selectbox("현장 필터", sites)
@@ -433,8 +422,30 @@ def main_app():
     if user_role == 'admin':
         with tabs[6]:
             st.subheader("👑 관리자 페이지")
-            st.write("#### 👤 회원 승인 대기")
+            
+            # [복구] 전체 회원 관리 섹션
+            st.write("#### 👥 전체 회원 관리 (탈퇴)")
             users = get_all_users()
+            approved_users = users[users['approved'] == True]
+            
+            if approved_users.empty:
+                st.info("승인된 회원이 없습니다.")
+            else:
+                for idx, row in approved_users.iterrows():
+                    # 관리자 본인은 제외
+                    if row['role'] == 'admin': continue
+                    
+                    c1, c2, c3 = st.columns([3, 2, 1])
+                    c1.write(f"👤 **{row['username']}** (생일: {row['birthdate']})")
+                    c2.caption(f"가입일: {row['created_at']}")
+                    if c3.button("추방(탈퇴)", key=f"kick_{idx}"):
+                        update_user_status(row['username'], "delete")
+                        st.warning(f"{row['username']} 님을 탈퇴시켰습니다.")
+                        st.rerun()
+
+            st.divider()
+
+            st.write("#### ⏳ 승인 대기")
             pending = users[users['approved'] == False]
             if pending.empty: st.info("대기 없음")
             else:
@@ -443,6 +454,7 @@ def main_app():
                     c1.write(f"**{row['username']}** (생일: {row['birthdate']})")
                     if c3.button("승인", key=f"ok_{idx}"): update_user_status(row['username'], "approve"); st.rerun()
                     if c4.button("거절", key=f"no_{idx}"): update_user_status(row['username'], "delete"); st.rerun()
+            
             st.divider()
             st.write("#### 🗑️ 삭제 요청 목록")
             if os.path.exists(DEL_REQ_FILE_NAME):
