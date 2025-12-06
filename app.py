@@ -147,23 +147,14 @@ def create_dispatch_ticket_grouped(site_name, items_df, worker):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
         ws = writer.sheets['출고증']
-        
-        # 스타일 설정
         title_font = Font(bold=True, size=16)
         ws['A1'] = "장비 출고증"
         ws['A1'].font = title_font
-        
         ws['A2'] = f"현장명: {site_name}"
         ws['A3'] = f"출고 담당자: {worker}"
         ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        
-        ws.column_dimensions['A'].width = 25
-        ws.column_dimensions['B'].width = 15
-        ws.column_dimensions['C'].width = 10
-        ws.column_dimensions['D'].width = 15
-        ws.column_dimensions['E'].width = 15
-        ws.column_dimensions['F'].width = 30
-        
+        ws.column_dimensions['A'].width = 25; ws.column_dimensions['B'].width = 15; ws.column_dimensions['C'].width = 10
+        ws.column_dimensions['D'].width = 15; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 30
     return output.getvalue()
 
 def request_deletion(item_id, item_name, reason="사용자 요청"):
@@ -188,7 +179,6 @@ def main_app():
     df = st.session_state.df
     user_role = st.session_state.get('role', 'user')
 
-    # --- 사이드바 ---
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
         st.caption(f"권한: {'👑 관리자' if user_role == 'admin' else '일반 사용자'}")
@@ -222,14 +212,12 @@ def main_app():
                 csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
                 st.download_button("💾 장비 목록 백업 (ID 제외)", csv_data, "equipment_list.csv", "text/csv")
 
-    # --- 메인 화면 ---
     col_h1, col_h2 = st.columns([8, 2])
     col_h1.title("🛠️ 통합 장비 관리 시스템")
     if col_h2.button("로그아웃", type="secondary"):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
 
-    # 현황판
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🚚 대여 중", df[df['대여여부'] == '대여 중']['수량'].sum() if not df.empty else 0)
     c2.metric("🎬 현장 출고", df[df['대여여부'] == '현장 출고']['수량'].sum() if not df.empty else 0)
@@ -242,93 +230,70 @@ def main_app():
     if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
 
-    # 1. 재고 관리 (추가/수정/삭제)
+    # ------------------ 1. 재고 관리 (엑셀 스타일 수정 기능 추가) ------------------
     with tabs[0]:
         st.subheader("장비 관리")
         
-        col_add, col_edit = st.columns(2)
-        
-        # [기존] 등록 기능
-        with col_add:
-            with st.expander("➕ 새 장비 등록"):
-                with st.form("add_form", clear_on_submit=True):
-                    new_type = st.text_input("타입")
-                    new_name = st.text_input("이름")
-                    new_count = st.number_input("수량", 1, value=1)
-                    new_brand = st.text_input("브랜드")
-                    new_lender = st.text_input("대여업체")
-                    new_note = st.text_input("특이사항")
-                    img_file = st.file_uploader("장비 사진", type=['png', 'jpg'])
-                    if st.form_submit_button("등록"):
-                        if new_name:
-                            img_path = ""
-                            if img_file:
-                                img_path = os.path.join("images", img_file.name)
-                                with open(os.path.join(DATA_DIR, img_path), "wb") as f: f.write(img_file.getbuffer())
-                            new_row = {'ID': str(uuid.uuid4()), '타입': new_type, '이름': new_name, '수량': new_count, '브랜드': new_brand, '특이사항': new_note, '대여업체': new_lender, '대여여부': '재고', '대여자': '', '대여일': '', '반납예정일': '', '출고비고': '', '사진': img_path}
-                            st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True); save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
-                        else: st.error("이름 필수")
-
-        # [추가] 수정 기능
-        with col_edit:
-            with st.expander("🔧 장비 정보 수정"):
-                # 수정할 장비 찾기
-                all_items = st.session_state.df
-                if not all_items.empty:
-                    edit_opts = all_items.apply(lambda x: f"{x['이름']} ({x['브랜드']}) - {x['대여여부']}", axis=1)
-                    edit_idx = st.selectbox("수정할 장비 선택", options=edit_opts.index, format_func=lambda x: edit_opts[x])
-                    
-                    if edit_idx is not None:
-                        item_to_edit = all_items.loc[edit_idx]
-                        with st.form("edit_form"):
-                            e_type = st.text_input("타입", value=item_to_edit['타입'])
-                            e_name = st.text_input("이름", value=item_to_edit['이름'])
-                            e_count = st.number_input("수량 (전체 수량)", min_value=1, value=int(item_to_edit['수량']))
-                            e_brand = st.text_input("브랜드", value=item_to_edit['브랜드'])
-                            e_lender = st.text_input("대여업체", value=item_to_edit['대여업체'])
-                            e_note = st.text_input("특이사항", value=item_to_edit['특이사항'])
-                            
-                            if st.form_submit_button("수정 저장"):
-                                st.session_state.df.at[edit_idx, '타입'] = e_type
-                                st.session_state.df.at[edit_idx, '이름'] = e_name
-                                st.session_state.df.at[edit_idx, '수량'] = e_count
-                                st.session_state.df.at[edit_idx, '브랜드'] = e_brand
-                                st.session_state.df.at[edit_idx, '대여업체'] = e_lender
-                                st.session_state.df.at[edit_idx, '특이사항'] = e_note
-                                save_data(st.session_state.df)
-                                st.success("수정 완료!")
-                                st.rerun()
-                else:
-                    st.info("수정할 장비가 없습니다.")
+        with st.expander("➕ 새 장비 등록"):
+            with st.form("add_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 2, 1])
+                new_type = c1.text_input("타입"); new_name = c2.text_input("이름"); new_count = c3.number_input("수량", 1, value=1)
+                c4, c5 = st.columns(2)
+                new_brand = c4.text_input("브랜드"); new_lender = c5.text_input("대여업체")
+                new_note = st.text_input("특이사항")
+                img_file = st.file_uploader("장비 사진", type=['png', 'jpg'])
+                if st.form_submit_button("등록"):
+                    if new_name:
+                        img_path = ""
+                        if img_file:
+                            img_path = os.path.join("images", img_file.name)
+                            with open(os.path.join(DATA_DIR, img_path), "wb") as f: f.write(img_file.getbuffer())
+                        new_row = {'ID': str(uuid.uuid4()), '타입': new_type, '이름': new_name, '수량': new_count, '브랜드': new_brand, '특이사항': new_note, '대여업체': new_lender, '대여여부': '재고', '대여자': '', '대여일': '', '반납예정일': '', '출고비고': '', '사진': img_path}
+                        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True); save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
+                    else: st.error("이름 필수")
 
         st.write("---")
         
+        # [수정] 엑셀 스타일 편집기 기능 도입
+        st.write("#### 📝 장비 목록 (더블클릭하여 수정 가능)")
+        st.info("💡 팁: '이름', '수량', '브랜드' 등은 바로 수정할 수 있습니다. (대여 상태 등은 자동으로 잠금 처리됩니다)")
+
         search_q = st.text_input("🔍 재고 검색", placeholder="이름, 브랜드...")
-        view_df = st.session_state.df.copy()
-        if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
-        def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
-            try:
-                r_val = row['반납예정일']
-                if pd.isna(r_val) or r_val == "" or str(r_val).lower() == 'nan': r_date = ""
-                else: r_date = str(r_val)[0:10]
-            except: r_date = ""
+        # 원본 데이터를 복사해서 보여줄 데이터 생성
+        view_df = st.session_state.df.copy()
+        if search_q: 
+            view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-            style = [''] * len(row)
-            if r_date and r_date < today and status in ['대여 중', '현장 출고']: style = ['background-color: #ffcccc'] * len(row)
-            elif status == '대여 중': style = ['background-color: #e65100; color: white'] * len(row)
-            elif status == '현장 출고': style = ['background-color: #e3f2fd'] * len(row)
-            elif status == '파손': style = ['background-color: #cfd8dc; color: red'] * len(row)
-            elif status == '수리 중': style = ['background-color: #ffccbc'] * len(row)
-            return style
+        # 데이터 에디터 설정 (수정 가능하게)
+        edited_df = st.data_editor(
+            view_df,
+            column_config={
+                "ID": None, # ID는 숨김
+                "사진": st.column_config.TextColumn("사진 경로 (수정 불가)", disabled=True),
+            },
+            disabled=["ID", "대여여부", "대여자", "대여일", "반납예정일", "출고비고", "사진"], # 시스템 관리 컬럼은 수정 금지
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed" # 행 추가/삭제는 상단 등록/하단 삭제 버튼 이용
+        )
 
-        display_df = view_df.drop(columns=['ID'], errors='ignore')
-        st.dataframe(display_df.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+        # 수정사항 저장 버튼
+        if st.button("💾 수정 사항 저장"):
+            # 편집된 데이터프레임을 순회하며 원본 데이터 업데이트
+            for index, row in edited_df.iterrows():
+                # ID가 일치하는 행을 찾아 업데이트 (안전한 방식)
+                st.session_state.df.loc[st.session_state.df['ID'] == row['ID'], ['타입', '이름', '수량', '브랜드', '특이사항', '대여업체']] = [row['타입'], row['이름'], row['수량'], row['브랜드'], row['특이사항'], row['대여업체']]
+            
+            save_data(st.session_state.df)
+            st.success("모든 수정 사항이 저장되었습니다!")
+            st.rerun()
 
+        st.write("---")
+        # 삭제 기능 (기존 유지)
         if not view_df.empty:
             del_opts = view_df.apply(lambda x: f"{x['이름']} ({x['브랜드']})", axis=1)
-            to_delete_idx = st.selectbox("삭제 요청/처리 선택", options=del_opts.index, format_func=lambda x: del_opts[x])
+            to_delete_idx = st.selectbox("🗑️ 삭제 요청/처리 선택", options=del_opts.index, format_func=lambda x: del_opts[x])
             if st.button("삭제 실행"):
                 item_to_del = st.session_state.df.loc[to_delete_idx]
                 if user_role == 'admin':
@@ -364,8 +329,15 @@ def main_app():
                                 st.session_state.df.at[sel, '대여여부'] = '대여 중'; st.session_state.df.at[sel, '대여자'] = tgt; st.session_state.df.at[sel, '대여일'] = d1s; st.session_state.df.at[sel, '반납예정일'] = d2s
                             log_transaction("외부대여", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df); st.success("완료"); st.rerun()
         st.write("---")
-        st.write("#### 📋 현재 대여 중 목록"); cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
-        if not cur_rent.empty: st.dataframe(cur_rent[['이름', '대여자', '수량', '반납예정일']], use_container_width=True)
+        st.write("#### 📋 현재 대여 중 목록")
+        cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
+        # [수정] 대여 현황판도 보기 좋게 색상 적용 (수정은 불가)
+        def highlight_rent(row):
+            return ['background-color: #e65100; color: white'] * len(row)
+        
+        if not cur_rent.empty: 
+            disp_rent = cur_rent[['이름', '대여자', '수량', '반납예정일']].reset_index(drop=True)
+            st.dataframe(disp_rent.style.apply(highlight_rent, axis=1), use_container_width=True)
 
     # 3. 현장 출고
     with tabs[2]:
@@ -404,7 +376,11 @@ def main_app():
             if s_site != "선택하세요":
                 site_data = cur_disp[cur_disp['대여자'] == s_site]
                 display_table = site_data[['대여자', '이름', '수량', '반납예정일', '출고비고']].rename(columns={'대여자': '현장명'})
-                st.dataframe(display_table, use_container_width=True)
+                
+                # [수정] 현장 출고 현황판 색상 적용 (파란색)
+                def highlight_disp(row): return ['background-color: #e3f2fd'] * len(row)
+                st.dataframe(display_table.style.apply(highlight_disp, axis=1), use_container_width=True)
+                
                 ticket_data = create_dispatch_ticket_grouped(s_site, site_data, st.session_state.username)
                 st.download_button(label=f"📄 [{s_site}] 전체 출고증 다운로드", data=ticket_data, file_name=f"dispatch_ticket_{s_site}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else: st.info("출고된 장비가 없습니다.")
