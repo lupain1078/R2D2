@@ -85,7 +85,6 @@ def change_user_password(username, new_password):
     return True
 
 def verify_password(username, input_password):
-    """현재 비밀번호 확인용"""
     df = pd.read_csv(USER_FILE_NAME)
     stored_pw = df.loc[df['username'] == username, 'password'].values[0]
     return stored_pw == hash_password(input_password)
@@ -168,7 +167,6 @@ def main_app():
         st.header(f"👤 {st.session_state.username}님")
         st.caption(f"권한: {'👑 관리자' if user_role == 'admin' else '일반 사용자'}")
         
-        # [기능 1] 비밀번호 변경 강화 (현재비번, 새비번, 확인)
         st.divider()
         with st.expander("🔒 비밀번호 변경"):
             with st.form("change_pw_form"):
@@ -199,9 +197,19 @@ def main_app():
                     save_data(new_df)
                     st.success("데이터 로드 완료!"); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
-            if os.path.exists(FILE_NAME):
-                with open(FILE_NAME, "rb") as f:
-                    st.download_button("💾 전체 백업 다운로드", f, "backup.csv", "text/csv")
+            
+            # [수정] 백업 다운로드 시 ID 제외하고 장비 목록만 다운로드
+            if not st.session_state.df.empty:
+                # ID 컬럼 제거한 데이터프레임 생성
+                clean_df = st.session_state.df.drop(columns=['ID'], errors='ignore')
+                csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
+                
+                st.download_button(
+                    label="💾 장비 목록 백업 다운로드 (ID 제외)",
+                    data=csv_data,
+                    file_name="equipment_list.csv",
+                    mime="text/csv"
+                )
 
     # --- 메인 화면 ---
     col_h1, col_h2 = st.columns([8, 2])
@@ -219,11 +227,8 @@ def main_app():
 
     st.divider()
 
-    # [기능 2] 탭 구성 (일반 사용자에게는 관리자 메뉴 안 보이게)
     tab_titles = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"]
-    if user_role == 'admin':
-        tab_titles.append("👑 관리자 페이지")
-    
+    if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
 
     # 1. 재고 관리
@@ -261,7 +266,9 @@ def main_app():
             elif status == '수리 중': return ['background-color: #ffccbc'] * len(row)
             return [''] * len(row)
 
-        st.dataframe(view_df.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
+        # [수정] ID 컬럼 숨기고 출력
+        display_df = view_df.drop(columns=['ID'], errors='ignore')
+        st.dataframe(display_df.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
 
         if not view_df.empty:
             del_opts = view_df.apply(lambda x: f"{x['이름']} ({x['브랜드']})", axis=1)
@@ -305,6 +312,7 @@ def main_app():
                             log_transaction("외부대여", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df); st.success("완료"); st.rerun()
         st.write("---")
         st.write("#### 📋 현재 대여 중 목록"); cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
+        # [수정] ID 숨김
         if not cur_rent.empty: st.dataframe(cur_rent[['이름', '대여자', '수량', '반납예정일']], use_container_width=True)
 
     # 3. 현장 출고
@@ -340,6 +348,7 @@ def main_app():
                 if 'last_ticket' in st.session_state: st.download_button("📄 출고증 다운로드", st.session_state.last_ticket, "dispatch.xlsx")
         st.write("---")
         st.write("#### 📋 현장별 현황"); cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
+        # [수정] ID 숨김
         if not cur_disp.empty:
             sites = ["전체보기"] + list(cur_disp['대여자'].unique())
             s_site = st.selectbox("현장 필터", sites)
@@ -397,45 +406,33 @@ def main_app():
                         if stat == '재고': st.session_state.df.at[sel, '대여자'] = ''
                         log_transaction(f"상태변경({stat})", item['이름'], q, stat, datetime.now().strftime("%Y-%m-%d")); save_data(st.session_state.df); st.success("완료"); st.rerun()
 
-    # 6. 내역 관리 (이름 변경, 전체 선택 추가)
+    # 6. 내역 관리
     with tabs[5]:
         st.subheader("📜 내역 관리")
         if os.path.exists(LOG_FILE_NAME):
             log_df = pd.read_csv(LOG_FILE_NAME)
             log_df = log_df.iloc[::-1] # 최신순
             
-            # [기능 4] 관리자일 때만 선택/삭제 가능 + 전체 선택 기능
             if user_role == 'admin':
                 st.warning("⚠️ 관리자 권한: 내역 삭제 가능")
-                
-                # '선택' 컬럼 추가 (기본 False)
-                if '선택' not in log_df.columns:
-                    log_df.insert(0, "선택", False)
-                
-                # 전체 선택 버튼
-                if st.checkbox("✅ 전체 선택 (모든 내역을 삭제 대상으로 선택합니다)"):
-                    log_df['선택'] = True
+                if '선택' not in log_df.columns: log_df.insert(0, "선택", False)
+                if st.checkbox("✅ 전체 선택"): log_df['선택'] = True
                 
                 edited_df = st.data_editor(log_df, hide_index=True, use_container_width=True)
-                
                 if st.button("선택한 내역 영구 삭제"):
                     remaining_df = edited_df[edited_df['선택'] == False].drop(columns=['선택'])
                     remaining_df.to_csv(LOG_FILE_NAME, index=False)
-                    st.success("삭제 완료")
-                    st.rerun()
+                    st.success("삭제 완료"); st.rerun()
             else:
-                # 일반 사용자는 조회만
                 st.dataframe(log_df, use_container_width=True)
-                
             csv_d = log_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # 7. 관리자 페이지 (일반 사용자는 애초에 탭이 안 보여서 접근 불가)
+    # 7. 관리자 페이지
     if user_role == 'admin':
         with tabs[6]:
             st.subheader("👑 관리자 페이지")
-            
             st.write("#### 👤 회원 승인 대기")
             users = get_all_users()
             pending = users[users['approved'] == False]
@@ -446,7 +443,6 @@ def main_app():
                     c1.write(f"**{row['username']}** (생일: {row['birthdate']})")
                     if c3.button("승인", key=f"ok_{idx}"): update_user_status(row['username'], "approve"); st.rerun()
                     if c4.button("거절", key=f"no_{idx}"): update_user_status(row['username'], "delete"); st.rerun()
-            
             st.divider()
             st.write("#### 🗑️ 삭제 요청 목록")
             if os.path.exists(DEL_REQ_FILE_NAME):
