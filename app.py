@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime
 import shutil
 from io import BytesIO
+from openpyxl.styles import Font, Alignment, Border, Side  # [추가] 엑셀 스타일링용
 
 # ====================================================================
 # 1. 설정 및 기본 경로
@@ -138,6 +139,7 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
+# [수정] 최신 방식의 엑셀 스타일링 적용 (에러 해결)
 def create_dispatch_ticket_grouped(site_name, items_df, worker):
     output = BytesIO()
     display_df = items_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
@@ -146,13 +148,26 @@ def create_dispatch_ticket_grouped(site_name, items_df, worker):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
         ws = writer.sheets['출고증']
+        
+        # 폰트 및 스타일 설정 (openpyxl 사용)
+        title_font = Font(bold=True, size=16)
+        normal_font = Font(size=11)
+        
         ws['A1'] = "장비 출고증"
-        ws['A1'].font = pd.io.formats.excel.ExcelCell.style_converter({'font': {'bold': True, 'size': 16}})['font']
+        ws['A1'].font = title_font
+        
         ws['A2'] = f"현장명: {site_name}"
         ws['A3'] = f"출고 담당자: {worker}"
         ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ws.column_dimensions['A'].width = 25; ws.column_dimensions['B'].width = 15; ws.column_dimensions['C'].width = 10
-        ws.column_dimensions['D'].width = 15; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 30
+        
+        # 열 너비 조정
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 10
+        ws.column_dimensions['D'].width = 15
+        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['F'].width = 30
+        
     return output.getvalue()
 
 def request_deletion(item_id, item_name, reason="사용자 요청"):
@@ -256,15 +271,37 @@ def main_app():
         view_df = st.session_state.df.copy()
         if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
-        # [수정] 색상 표시 로직 변경 (가시성 확보)
+        # [수정] 날짜 비교 오류 방지 및 색상 로직 개선
         def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d"); status = row['대여여부']; r_date = str(row['반납예정일']).strip()
-            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: return ['background-color: #ffcccc'] * len(row) # 연체 (빨강)
-            elif status == '대여 중': return ['background-color: #e65100; color: white'] * len(row) # [수정] 진한 주황색 배경, 흰색 글씨
-            elif status == '현장 출고': return ['background-color: #e3f2fd'] * len(row) # 파랑
-            elif status == '파손': return ['background-color: #cfd8dc; color: red'] * len(row) # 회색 배경, 빨간 글씨
-            elif status == '수리 중': return ['background-color: #ffccbc'] * len(row) # 살구색
-            return [''] * len(row)
+            today = datetime.now().strftime("%Y-%m-%d")
+            status = str(row['대여여부'])
+            
+            # 날짜를 문자열로 안전하게 변환
+            try:
+                r_val = row['반납예정일']
+                if pd.isna(r_val) or r_val == "" or str(r_val).lower() == 'nan':
+                    r_date = ""
+                else:
+                    # 엑셀 날짜 포맷이 섞여있어도 앞 10자리(YYYY-MM-DD)만 추출
+                    r_date = str(r_val)[0:10]
+            except:
+                r_date = ""
+
+            style = [''] * len(row)
+            
+            # 비교 로직 (날짜가 존재할 때만 비교)
+            if r_date and r_date < today and status in ['대여 중', '현장 출고']:
+                style = ['background-color: #ffcccc'] * len(row)
+            elif status == '대여 중':
+                style = ['background-color: #e65100; color: white'] * len(row) # 진한 주황색
+            elif status == '현장 출고':
+                style = ['background-color: #e3f2fd'] * len(row)
+            elif status == '파손':
+                style = ['background-color: #cfd8dc; color: red'] * len(row)
+            elif status == '수리 중':
+                style = ['background-color: #ffccbc'] * len(row)
+            
+            return style
 
         display_df = view_df.drop(columns=['ID'], errors='ignore')
         st.dataframe(display_df.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True)
@@ -490,4 +527,4 @@ if __name__ == '__main__':
     init_user_db()
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
     if st.session_state.logged_in: main_app()
-    else: login_page() 
+    else: login_page()
