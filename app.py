@@ -601,12 +601,16 @@ def main_app():
                 st.write("#### ⚠️ 관리자 삭제 모드")
                 if '선택' not in hist_df.columns: hist_df.insert(0, '선택', False)
                 
-                # 삭제용 에디터
+                # 삭제용 에디터 (여기서 column_config를 수정했습니다)
                 edited_del = st.data_editor(
                     hist_df[['선택', 'site_names', 'writer', 'created_at', 'ticket_id', 'file_path']], 
                     column_config={
-                        "ticket_id": None, "file_path": None, # 숨김
-                        "선택": st.column_config.CheckboxColumn("삭제", default=False)
+                        "ticket_id": None, "file_path": None, # 숨김 처리
+                        "선택": st.column_config.CheckboxColumn("삭제", default=False),
+                        # ▼▼▼ [수정된 부분] 영어 컬럼명을 한글로 표시 ▼▼▼
+                        "site_names": st.column_config.TextColumn("현장명"),
+                        "writer": st.column_config.TextColumn("작성자"),
+                        "created_at": st.column_config.TextColumn("발급일시")
                     },
                     hide_index=True, use_container_width=True, key="del_editor"
                 )
@@ -757,3 +761,4 @@ if __name__ == '__main__':
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
     if st.session_state.logged_in: main_app()
     else: login_page()
+
