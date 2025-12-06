@@ -388,7 +388,11 @@ def main_app():
     # 2. 외부 대여
     with tabs[1]:
         st.subheader("📤 외부 대여")
-        rent_search = st.text_input("🔍 검색", key="rent_s")
+        
+        # [수정] 검색창을 접었다 폈다 할 수 있게 st.expander 적용
+        with st.expander("🔍 장비 검색 (펼치기/접기)", expanded=True):
+            rent_search = st.text_input("검색어 입력 (이름, 브랜드 등)", key="rent_s")
+        
         stock = st.session_state.df[st.session_state.df['대여여부'] == '재고']
         if rent_search: stock = stock[stock.apply(lambda row: row.astype(str).str.contains(rent_search, case=False).any(), axis=1)]
         if stock.empty: st.info("재고 없음")
@@ -423,7 +427,11 @@ def main_app():
     # 3. 현장 출고
     with tabs[2]:
         st.subheader("🎬 현장 출고")
-        disp_search = st.text_input("🔍 검색", key="disp_s")
+        
+        # [수정] 검색창을 접었다 폈다 할 수 있게 st.expander 적용
+        with st.expander("🔍 장비 검색 (펼치기/접기)", expanded=True):
+            disp_search = st.text_input("검색어 입력 (이름, 브랜드 등)", key="disp_s")
+        
         stock = st.session_state.df[st.session_state.df['대여여부'] == '재고']
         if disp_search: stock = stock[stock.apply(lambda row: row.astype(str).str.contains(disp_search, case=False).any(), axis=1)]
         if stock.empty: st.info("재고 없음")
@@ -474,6 +482,11 @@ def main_app():
         else: st.info("출고된 장비가 없습니다.")
 
     # 4. 반납
+    with tabs[4]: # 인덱스 수정됨 (3->4가 아님, 실제 탭 리스트 순서상 3번 인덱스임. tabs[3]으로 접근해야 함. 탭 리스트: 재고(0), 외부(1), 현장(2), 반납(3)...)
+        # 위 코드에서 tabs[3]으로 되어야 하는데 tabs[4]로 잘못 적혀있을 수 있으니 원본 로직 유지
+        pass 
+    
+    # 4. 반납 (다시 작성)
     with tabs[3]:
         st.subheader("📥 반납")
         return_method = st.radio("반납 방식 선택", ["개별 반납", "🏢 현장 전체 반납"], horizontal=True)
@@ -587,7 +600,7 @@ def main_app():
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # 7. 출고증 보관함 (UI 개선: 버튼을 목록 안에 배치)
+    # 7. 출고증 보관함 (관리자 삭제 모드 한글화 적용)
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
         
@@ -601,13 +614,12 @@ def main_app():
                 st.write("#### ⚠️ 관리자 삭제 모드")
                 if '선택' not in hist_df.columns: hist_df.insert(0, '선택', False)
                 
-                # 삭제용 에디터 (여기서 column_config를 수정했습니다)
+                # 삭제용 에디터 (한글 컬럼명 매핑 적용)
                 edited_del = st.data_editor(
                     hist_df[['선택', 'site_names', 'writer', 'created_at', 'ticket_id', 'file_path']], 
                     column_config={
-                        "ticket_id": None, "file_path": None, # 숨김 처리
+                        "ticket_id": None, "file_path": None, # 숨김
                         "선택": st.column_config.CheckboxColumn("삭제", default=False),
-                        # ▼▼▼ [수정된 부분] 영어 컬럼명을 한글로 표시 ▼▼▼
                         "site_names": st.column_config.TextColumn("현장명"),
                         "writer": st.column_config.TextColumn("작성자"),
                         "created_at": st.column_config.TextColumn("발급일시")
@@ -652,7 +664,6 @@ def main_app():
             if view_df.empty:
                 st.info("검색 결과가 없습니다.")
             else:
-                # [핵심 수정] 리스트 형태로 보여주며 바로 옆에 다운로드 버튼 배치
                 # 헤더
                 h1, h2, h3, h4 = st.columns([3, 2, 3, 2])
                 h1.markdown("**현장명**")
@@ -761,4 +772,3 @@ if __name__ == '__main__':
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
     if st.session_state.logged_in: main_app()
     else: login_page()
-
