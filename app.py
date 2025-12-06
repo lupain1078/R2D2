@@ -19,6 +19,7 @@ DATA_DIR = BASE_DIR
 IMG_DIR = os.path.join(DATA_DIR, 'images')
 TICKETS_DIR = os.path.join(DATA_DIR, 'tickets')
 
+# 폴더가 없으면 생성
 if not os.path.exists(IMG_DIR): os.makedirs(IMG_DIR)
 if not os.path.exists(TICKETS_DIR): os.makedirs(TICKETS_DIR)
 
@@ -32,13 +33,14 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수 (에러 방지 강화)
+# 2. 회원 및 데이터 처리 함수 (자동 복구 기능 강화)
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
+    # 1. 유저 DB 초기화 및 복구
     if not os.path.exists(USER_FILE_NAME):
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
@@ -54,23 +56,27 @@ def init_user_db():
         }
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
-    
-    # 출고증 보관함 초기화
+    else:
+        # [자동 복구] birthdate 컬럼이 없으면 추가
+        try:
+            df = pd.read_csv(USER_FILE_NAME)
+            if 'birthdate' not in df.columns:
+                df['birthdate'] = '0000-00-00'
+                df.to_csv(USER_FILE_NAME, index=False)
+        except: pass
+
+    # 2. 출고증 기록 DB 초기화 및 복구
     if not os.path.exists(TICKET_HISTORY_FILE):
         df_ticket = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
         df_ticket.to_csv(TICKET_HISTORY_FILE, index=False)
-
-def get_all_users():
-    """모든 유저 정보 (안전하게 불러오기)"""
-    init_user_db()
-    try:
-        df = pd.read_csv(USER_FILE_NAME)
-        # [핵심 수정] birthdate 컬럼이 없으면 강제로 만들어서 에러 방지
-        if 'birthdate' not in df.columns:
-            df['birthdate'] = '0000-00-00'
-        return df.fillna("")
-    except:
-        return pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
+    else:
+        # [자동 복구] file_path 컬럼이 없으면 추가 (KeyError 방지)
+        try:
+            df_th = pd.read_csv(TICKET_HISTORY_FILE)
+            if 'file_path' not in df_th.columns:
+                df_th['file_path'] = "" # 빈 값으로 컬럼 추가
+                df_th.to_csv(TICKET_HISTORY_FILE, index=False)
+        except: pass
 
 def register_user(username, password, birthdate):
     init_user_db()
@@ -108,6 +114,16 @@ def verify_password(username, input_password):
     df = pd.read_csv(USER_FILE_NAME)
     stored_pw = df.loc[df['username'] == username, 'password'].values[0]
     return stored_pw == hash_password(input_password)
+
+def get_all_users():
+    init_user_db()
+    # [수정] birthdate 컬럼 강제 확인하여 읽기
+    try:
+        df = pd.read_csv(USER_FILE_NAME)
+        if 'birthdate' not in df.columns: df['birthdate'] = '0000-00-00'
+        return df.fillna("")
+    except:
+        return pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
 
 def update_user_status(username, action):
     df = pd.read_csv(USER_FILE_NAME)
@@ -147,7 +163,7 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-# [수정] 엑셀 파일 생성 함수 (오류 해결)
+# [수정] 엑셀 생성 (AttributeError 해결을 위해 openpyxl 방식 사용)
 def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -158,11 +174,11 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             display_df = site_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
             display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
             
+            # 시트 이름 안전하게 처리
             sheet_title = str(site)[:30].replace("/", "_").replace("\\", "_")
             display_df.to_excel(writer, index=False, sheet_name=sheet_title, startrow=4)
             ws = writer.sheets[sheet_title]
             
-            # [수정] 스타일 적용 방식 변경 (openpyxl 직접 사용)
             title_font = Font(bold=True, size=16)
             ws['A1'] = f"장비 출고증 ({site})"
             ws['A1'].font = title_font
@@ -179,6 +195,9 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     return output.getvalue()
 
 def save_ticket_history(site_names_str, file_data):
+    # DB 초기화 다시 호출하여 컬럼 보장
+    init_user_db()
+    
     if not os.path.exists(TICKET_HISTORY_FILE):
         df = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
     else:
@@ -276,6 +295,7 @@ def main_app():
     # 1. 재고 관리
     with tabs[0]:
         st.subheader("장비 관리")
+        
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns([1, 2, 1])
@@ -307,21 +327,16 @@ def main_app():
         if search_q: 
             view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-        # [수정] 날짜 비교 에러 방지 (TypeError 해결)
+        # [수정] TypeError 및 가시성 해결
         def highlight_rows(row):
             today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
             try:
-                # 날짜가 비어있거나 nan이면 빈 문자열로 처리
                 val = row['반납예정일']
-                if pd.isna(val) or val == "" or str(val).lower() == 'nan':
-                    r_date = ""
-                else:
-                    r_date = str(val)[0:10]
-            except:
-                r_date = ""
+                if pd.isna(val) or val == "" or str(val).lower() == 'nan': r_date = ""
+                else: r_date = str(val)[0:10]
+            except: r_date = ""
 
             style = [''] * len(row)
-            # 날짜가 존재하고 유효할 때만 비교 수행
             if r_date and r_date < today and status in ['대여 중', '현장 출고']: 
                 style = ['background-color: #B71C1C; color: white'] * len(row)
             elif status == '대여 중': 
@@ -566,6 +581,7 @@ def main_app():
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
         
+        # init_user_db가 호출되어 file_path 컬럼이 확보된 상태
         if os.path.exists(TICKET_HISTORY_FILE):
             hist_df = pd.read_csv(TICKET_HISTORY_FILE)
             hist_df = hist_df.iloc[::-1] # 최신순 정렬
@@ -583,16 +599,27 @@ def main_app():
                 st.dataframe(hist_df[['site_names', 'writer', 'created_at']], use_container_width=True)
                 
                 st.write("#### 💾 파일 재다운로드")
-                selected_ticket = st.selectbox("다운로드할 출고증을 선택하세요", hist_df.index, format_func=lambda i: f"{hist_df.loc[i, 'created_at']} - {hist_df.loc[i, 'site_names']}")
                 
-                if selected_ticket is not None:
-                    file_name = hist_df.loc[selected_ticket, 'file_path']
-                    file_path = os.path.join(TICKETS_DIR, file_name)
-                    
-                    if os.path.exists(file_path):
-                        with open(file_path, "rb") as f:
-                            st.download_button(label="📥 선택한 출고증 다운로드", data=f, file_name=file_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    else: st.error("⚠️ 파일이 삭제되었습니다.")
+                # [수정] KeyError 방지를 위해 인덱스 대신 고유값 사용 로직
+                # selectbox에는 인덱스를 넘기되, loc 사용시 주의
+                ticket_options = {idx: f"{row['created_at']} - {row['site_names']}" for idx, row in hist_df.iterrows()}
+                selected_idx = st.selectbox("다운로드할 출고증을 선택하세요", options=list(ticket_options.keys()), format_func=lambda x: ticket_options[x])
+                
+                if selected_idx is not None:
+                    # 선택된 인덱스로 데이터 접근 (hist_df가 필터링된 상태여도 loc은 원본 인덱스 유지)
+                    try:
+                        file_name = hist_df.loc[selected_idx, 'file_path']
+                        # 파일 경로가 NaN인 경우 (구버전 데이터)
+                        if pd.isna(file_name) or file_name == "":
+                            st.warning("⚠️ 이 파일은 시스템 업데이트 이전에 생성되어 원본 파일이 없습니다.")
+                        else:
+                            file_path = os.path.join(TICKETS_DIR, file_name)
+                            if os.path.exists(file_path):
+                                with open(file_path, "rb") as f:
+                                    st.download_button(label="📥 선택한 출고증 다운로드", data=f, file_name=file_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            else: st.error("⚠️ 서버에서 파일이 삭제되었습니다.")
+                    except KeyError:
+                        st.error("파일 정보를 찾을 수 없습니다.")
             else: st.info("검색 결과가 없습니다.")
         else: st.info("발급된 출고증이 없습니다.")
 
@@ -600,6 +627,8 @@ def main_app():
     if user_role == 'admin':
         with tabs[7]:
             st.subheader("👑 관리자 페이지")
+            
+            # [수정] 회원 관리에서 birthdate 읽기 오류 방지
             st.write("#### 👥 전체 회원 관리")
             users = get_all_users()
             approved_users = users[users['approved'] == True]
@@ -608,7 +637,9 @@ def main_app():
                 for idx, row in approved_users.iterrows():
                     if row['role'] == 'admin': continue
                     c1, c2, c3 = st.columns([3, 2, 1])
-                    c1.write(f"👤 **{row['username']}** (생일: {row['birthdate']})")
+                    # birthdate가 없을 경우 처리
+                    bday = row.get('birthdate', '정보없음')
+                    c1.write(f"👤 **{row['username']}** (생일: {bday})")
                     c2.caption(f"가입일: {row['created_at']}")
                     if c3.button("추방", key=f"kick_{idx}"):
                         update_user_status(row['username'], "delete"); st.rerun()
@@ -619,7 +650,8 @@ def main_app():
             else:
                 for idx, row in pending.iterrows():
                     c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-                    c1.write(f"**{row['username']}** (생일: {row['birthdate']})")
+                    bday = row.get('birthdate', '정보없음')
+                    c1.write(f"**{row['username']}** (생일: {bday})")
                     if c3.button("승인", key=f"ok_{idx}"): update_user_status(row['username'], "approve"); st.rerun()
                     if c4.button("거절", key=f"no_{idx}"): update_user_status(row['username'], "delete"); st.rerun()
             st.divider()
