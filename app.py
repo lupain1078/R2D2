@@ -33,14 +33,14 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수 (자동 복구 기능 강화)
+# 2. 회원 및 데이터 처리 함수
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
-    # 1. 유저 DB 초기화 및 복구
+    # 1. 유저 DB
     if not os.path.exists(USER_FILE_NAME):
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
@@ -57,7 +57,6 @@ def init_user_db():
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
     else:
-        # [자동 복구] birthdate 컬럼이 없으면 추가
         try:
             df = pd.read_csv(USER_FILE_NAME)
             if 'birthdate' not in df.columns:
@@ -65,16 +64,15 @@ def init_user_db():
                 df.to_csv(USER_FILE_NAME, index=False)
         except: pass
 
-    # 2. 출고증 기록 DB 초기화 및 복구
+    # 2. 출고증 기록 DB
     if not os.path.exists(TICKET_HISTORY_FILE):
         df_ticket = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
         df_ticket.to_csv(TICKET_HISTORY_FILE, index=False)
     else:
-        # [자동 복구] file_path 컬럼이 없으면 추가 (KeyError 방지)
         try:
             df_th = pd.read_csv(TICKET_HISTORY_FILE)
             if 'file_path' not in df_th.columns:
-                df_th['file_path'] = "" # 빈 값으로 컬럼 추가
+                df_th['file_path'] = ""
                 df_th.to_csv(TICKET_HISTORY_FILE, index=False)
         except: pass
 
@@ -117,7 +115,6 @@ def verify_password(username, input_password):
 
 def get_all_users():
     init_user_db()
-    # [수정] birthdate 컬럼 강제 확인하여 읽기
     try:
         df = pd.read_csv(USER_FILE_NAME)
         if 'birthdate' not in df.columns: df['birthdate'] = '0000-00-00'
@@ -163,7 +160,6 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-# [수정] 엑셀 생성 (AttributeError 해결을 위해 openpyxl 방식 사용)
 def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -174,7 +170,6 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             display_df = site_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
             display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
             
-            # 시트 이름 안전하게 처리
             sheet_title = str(site)[:30].replace("/", "_").replace("\\", "_")
             display_df.to_excel(writer, index=False, sheet_name=sheet_title, startrow=4)
             ws = writer.sheets[sheet_title]
@@ -186,18 +181,12 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             ws['A3'] = f"출고 담당자: {worker}"
             ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             
-            ws.column_dimensions['A'].width = 25
-            ws.column_dimensions['B'].width = 15
-            ws.column_dimensions['C'].width = 10
-            ws.column_dimensions['D'].width = 15
-            ws.column_dimensions['E'].width = 15
-            ws.column_dimensions['F'].width = 30
+            ws.column_dimensions['A'].width = 25; ws.column_dimensions['B'].width = 15; ws.column_dimensions['C'].width = 10
+            ws.column_dimensions['D'].width = 15; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 30
     return output.getvalue()
 
 def save_ticket_history(site_names_str, file_data):
-    # DB 초기화 다시 호출하여 컬럼 보장
     init_user_db()
-    
     if not os.path.exists(TICKET_HISTORY_FILE):
         df = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
     else:
@@ -295,7 +284,6 @@ def main_app():
     # 1. 재고 관리
     with tabs[0]:
         st.subheader("장비 관리")
-        
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns([1, 2, 1])
@@ -327,7 +315,6 @@ def main_app():
         if search_q: 
             view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-        # [수정] TypeError 및 가시성 해결
         def highlight_rows(row):
             today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
             try:
@@ -473,7 +460,6 @@ def main_app():
     # 4. 반납
     with tabs[3]:
         st.subheader("📥 반납")
-        
         return_method = st.radio("반납 방식 선택", ["개별 반납 (기존 방식)", "🏢 현장 전체 반납 (일괄 처리)"], horizontal=True)
         
         if return_method == "개별 반납 (기존 방식)":
@@ -505,7 +491,7 @@ def main_app():
                                     st.session_state.df.at[sel, '대여여부'] = '재고'; st.session_state.df.at[sel, '대여자'] = ''
                             log_transaction("반납", item['이름'], q, item['대여자'], datetime.now().strftime("%Y-%m-%d")); save_data(st.session_state.df); st.success("완료"); st.rerun()
         
-        else: # 현장 전체 반납
+        else:
             cur_disp_all = st.session_state.df[st.session_state.df['대여여부'].isin(['대여 중', '현장 출고'])]
             if cur_disp_all.empty:
                 st.info("반납할 내역이 없습니다.")
@@ -577,49 +563,81 @@ def main_app():
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # 7. 출고증 보관함
+    # 7. 출고증 보관함 (관리자 삭제 기능 추가)
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
         
-        # init_user_db가 호출되어 file_path 컬럼이 확보된 상태
         if os.path.exists(TICKET_HISTORY_FILE):
-            hist_df = pd.read_csv(TICKET_HISTORY_FILE)
-            hist_df = hist_df.iloc[::-1] # 최신순 정렬
+            # Load Full Data
+            full_hist_df = pd.read_csv(TICKET_HISTORY_FILE)
+            display_df = full_hist_df.iloc[::-1].copy() # 최신순 표시용
             
             c_s1, c_s2, c_s3 = st.columns(3)
             s_site = c_s1.text_input("🔍 현장명 검색")
             s_date = c_s2.text_input("🔍 날짜 검색 (YYYY-MM-DD)")
             s_writer = c_s3.text_input("🔍 작성자 검색")
             
-            if s_site: hist_df = hist_df[hist_df['site_names'].str.contains(s_site, case=False, na=False)]
-            if s_date: hist_df = hist_df[hist_df['created_at'].str.contains(s_date, case=False, na=False)]
-            if s_writer: hist_df = hist_df[hist_df['writer'].str.contains(s_writer, case=False, na=False)]
+            # 필터 적용
+            if s_site: display_df = display_df[display_df['site_names'].str.contains(s_site, case=False, na=False)]
+            if s_date: display_df = display_df[display_df['created_at'].str.contains(s_date, case=False, na=False)]
+            if s_writer: display_df = display_df[display_df['writer'].str.contains(s_writer, case=False, na=False)]
             
-            if not hist_df.empty:
-                st.dataframe(hist_df[['site_names', 'writer', 'created_at']], use_container_width=True)
+            if not display_df.empty:
+                # [추가] 관리자 전용 삭제 인터페이스
+                if user_role == 'admin':
+                    st.warning("⚠️ 관리자 권한: 삭제 모드")
+                    if '선택' not in display_df.columns: display_df.insert(0, '선택', False)
+                    if st.checkbox("✅ 전체 선택 (화면에 보이는 항목만)"): display_df['선택'] = True
+                    
+                    edited_df = st.data_editor(
+                        display_df,
+                        column_config={
+                            "선택": st.column_config.CheckboxColumn("선택", default=False),
+                            "ticket_id": None, "file_path": None # 내부 정보 숨김
+                        },
+                        hide_index=True, use_container_width=True
+                    )
+                    
+                    if st.button("🗑️ 선택한 출고증 삭제"):
+                        to_delete_ids = edited_df[edited_df['선택']]['ticket_id'].tolist()
+                        to_delete_files = edited_df[edited_df['선택']]['file_path'].tolist()
+                        
+                        # 1. 파일 삭제
+                        for fname in to_delete_files:
+                            if isinstance(fname, str) and fname:
+                                try: os.remove(os.path.join(TICKETS_DIR, fname))
+                                except: pass
+                        
+                        # 2. CSV 목록에서 제거 (전체 데이터 기준)
+                        new_df = full_hist_df[~full_hist_df['ticket_id'].isin(to_delete_ids)]
+                        new_df.to_csv(TICKET_HISTORY_FILE, index=False)
+                        
+                        st.success("삭제 완료")
+                        st.rerun()
+                else:
+                    # 일반 사용자 뷰
+                    st.dataframe(display_df[['site_names', 'writer', 'created_at']], use_container_width=True)
                 
                 st.write("#### 💾 파일 재다운로드")
+                # selectbox에는 인덱스 대신 고유 ID나 식별 가능한 값을 쓰는게 안전하지만 간단히 처리
+                # display_df는 필터링된 뷰이므로, 여기서 선택하면 파일 경로를 찾아야 함
                 
-                # [수정] KeyError 방지를 위해 인덱스 대신 고유값 사용 로직
-                # selectbox에는 인덱스를 넘기되, loc 사용시 주의
-                ticket_options = {idx: f"{row['created_at']} - {row['site_names']}" for idx, row in hist_df.iterrows()}
-                selected_idx = st.selectbox("다운로드할 출고증을 선택하세요", options=list(ticket_options.keys()), format_func=lambda x: ticket_options[x])
+                # 딕셔너리로 매핑 {인덱스: 표시이름}
+                ticket_map = {idx: f"{row['created_at']} - {row['site_names']}" for idx, row in display_df.iterrows()}
+                selected_idx = st.selectbox("다운로드할 출고증을 선택하세요", options=list(ticket_map.keys()), format_func=lambda x: ticket_map[x])
                 
                 if selected_idx is not None:
-                    # 선택된 인덱스로 데이터 접근 (hist_df가 필터링된 상태여도 loc은 원본 인덱스 유지)
                     try:
-                        file_name = hist_df.loc[selected_idx, 'file_path']
-                        # 파일 경로가 NaN인 경우 (구버전 데이터)
+                        file_name = display_df.loc[selected_idx, 'file_path']
                         if pd.isna(file_name) or file_name == "":
-                            st.warning("⚠️ 이 파일은 시스템 업데이트 이전에 생성되어 원본 파일이 없습니다.")
+                            st.warning("⚠️ 원본 파일이 없습니다.")
                         else:
                             file_path = os.path.join(TICKETS_DIR, file_name)
                             if os.path.exists(file_path):
                                 with open(file_path, "rb") as f:
                                     st.download_button(label="📥 선택한 출고증 다운로드", data=f, file_name=file_name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             else: st.error("⚠️ 서버에서 파일이 삭제되었습니다.")
-                    except KeyError:
-                        st.error("파일 정보를 찾을 수 없습니다.")
+                    except: st.error("파일 정보를 불러올 수 없습니다.")
             else: st.info("검색 결과가 없습니다.")
         else: st.info("발급된 출고증이 없습니다.")
 
@@ -627,8 +645,6 @@ def main_app():
     if user_role == 'admin':
         with tabs[7]:
             st.subheader("👑 관리자 페이지")
-            
-            # [수정] 회원 관리에서 birthdate 읽기 오류 방지
             st.write("#### 👥 전체 회원 관리")
             users = get_all_users()
             approved_users = users[users['approved'] == True]
@@ -637,7 +653,6 @@ def main_app():
                 for idx, row in approved_users.iterrows():
                     if row['role'] == 'admin': continue
                     c1, c2, c3 = st.columns([3, 2, 1])
-                    # birthdate가 없을 경우 처리
                     bday = row.get('birthdate', '정보없음')
                     c1.write(f"👤 **{row['username']}** (생일: {bday})")
                     c2.caption(f"가입일: {row['created_at']}")
