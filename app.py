@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime
 import shutil
 from io import BytesIO
-from openpyxl.styles import Font, Alignment, Border, Side  # [추가] 엑셀 스타일링용
+from openpyxl.styles import Font, Alignment, Border, Side
 
 # ====================================================================
 # 1. 설정 및 기본 경로
@@ -139,7 +139,6 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-# [수정] 최신 방식의 엑셀 스타일링 적용 (에러 해결)
 def create_dispatch_ticket_grouped(site_name, items_df, worker):
     output = BytesIO()
     display_df = items_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
@@ -149,10 +148,8 @@ def create_dispatch_ticket_grouped(site_name, items_df, worker):
         display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
         ws = writer.sheets['출고증']
         
-        # 폰트 및 스타일 설정 (openpyxl 사용)
+        # 스타일 설정
         title_font = Font(bold=True, size=16)
-        normal_font = Font(size=11)
-        
         ws['A1'] = "장비 출고증"
         ws['A1'].font = title_font
         
@@ -160,7 +157,6 @@ def create_dispatch_ticket_grouped(site_name, items_df, worker):
         ws['A3'] = f"출고 담당자: {worker}"
         ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
-        # 열 너비 조정
         ws.column_dimensions['A'].width = 25
         ws.column_dimensions['B'].width = 15
         ws.column_dimensions['C'].width = 10
@@ -246,61 +242,85 @@ def main_app():
     if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
 
-    # 1. 재고 관리
+    # 1. 재고 관리 (추가/수정/삭제)
     with tabs[0]:
         st.subheader("장비 관리")
-        with st.expander("➕ 새 장비 등록"):
-            with st.form("add_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns([1, 2, 1])
-                new_type = c1.text_input("타입"); new_name = c2.text_input("이름"); new_count = c3.number_input("수량", 1, value=1)
-                c4, c5 = st.columns(2)
-                new_brand = c4.text_input("브랜드"); new_lender = c5.text_input("대여업체")
-                new_note = st.text_input("특이사항")
-                img_file = st.file_uploader("장비 사진", type=['png', 'jpg'])
-                if st.form_submit_button("등록"):
-                    if new_name:
-                        img_path = ""
-                        if img_file:
-                            img_path = os.path.join("images", img_file.name)
-                            with open(os.path.join(DATA_DIR, img_path), "wb") as f: f.write(img_file.getbuffer())
-                        new_row = {'ID': str(uuid.uuid4()), '타입': new_type, '이름': new_name, '수량': new_count, '브랜드': new_brand, '특이사항': new_note, '대여업체': new_lender, '대여여부': '재고', '대여자': '', '대여일': '', '반납예정일': '', '출고비고': '', '사진': img_path}
-                        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True); save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
-                    else: st.error("이름 필수")
+        
+        col_add, col_edit = st.columns(2)
+        
+        # [기존] 등록 기능
+        with col_add:
+            with st.expander("➕ 새 장비 등록"):
+                with st.form("add_form", clear_on_submit=True):
+                    new_type = st.text_input("타입")
+                    new_name = st.text_input("이름")
+                    new_count = st.number_input("수량", 1, value=1)
+                    new_brand = st.text_input("브랜드")
+                    new_lender = st.text_input("대여업체")
+                    new_note = st.text_input("특이사항")
+                    img_file = st.file_uploader("장비 사진", type=['png', 'jpg'])
+                    if st.form_submit_button("등록"):
+                        if new_name:
+                            img_path = ""
+                            if img_file:
+                                img_path = os.path.join("images", img_file.name)
+                                with open(os.path.join(DATA_DIR, img_path), "wb") as f: f.write(img_file.getbuffer())
+                            new_row = {'ID': str(uuid.uuid4()), '타입': new_type, '이름': new_name, '수량': new_count, '브랜드': new_brand, '특이사항': new_note, '대여업체': new_lender, '대여여부': '재고', '대여자': '', '대여일': '', '반납예정일': '', '출고비고': '', '사진': img_path}
+                            st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True); save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
+                        else: st.error("이름 필수")
 
+        # [추가] 수정 기능
+        with col_edit:
+            with st.expander("🔧 장비 정보 수정"):
+                # 수정할 장비 찾기
+                all_items = st.session_state.df
+                if not all_items.empty:
+                    edit_opts = all_items.apply(lambda x: f"{x['이름']} ({x['브랜드']}) - {x['대여여부']}", axis=1)
+                    edit_idx = st.selectbox("수정할 장비 선택", options=edit_opts.index, format_func=lambda x: edit_opts[x])
+                    
+                    if edit_idx is not None:
+                        item_to_edit = all_items.loc[edit_idx]
+                        with st.form("edit_form"):
+                            e_type = st.text_input("타입", value=item_to_edit['타입'])
+                            e_name = st.text_input("이름", value=item_to_edit['이름'])
+                            e_count = st.number_input("수량 (전체 수량)", min_value=1, value=int(item_to_edit['수량']))
+                            e_brand = st.text_input("브랜드", value=item_to_edit['브랜드'])
+                            e_lender = st.text_input("대여업체", value=item_to_edit['대여업체'])
+                            e_note = st.text_input("특이사항", value=item_to_edit['특이사항'])
+                            
+                            if st.form_submit_button("수정 저장"):
+                                st.session_state.df.at[edit_idx, '타입'] = e_type
+                                st.session_state.df.at[edit_idx, '이름'] = e_name
+                                st.session_state.df.at[edit_idx, '수량'] = e_count
+                                st.session_state.df.at[edit_idx, '브랜드'] = e_brand
+                                st.session_state.df.at[edit_idx, '대여업체'] = e_lender
+                                st.session_state.df.at[edit_idx, '특이사항'] = e_note
+                                save_data(st.session_state.df)
+                                st.success("수정 완료!")
+                                st.rerun()
+                else:
+                    st.info("수정할 장비가 없습니다.")
+
+        st.write("---")
+        
         search_q = st.text_input("🔍 재고 검색", placeholder="이름, 브랜드...")
         view_df = st.session_state.df.copy()
         if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
-        # [수정] 날짜 비교 오류 방지 및 색상 로직 개선
         def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d")
-            status = str(row['대여여부'])
-            
-            # 날짜를 문자열로 안전하게 변환
+            today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
             try:
                 r_val = row['반납예정일']
-                if pd.isna(r_val) or r_val == "" or str(r_val).lower() == 'nan':
-                    r_date = ""
-                else:
-                    # 엑셀 날짜 포맷이 섞여있어도 앞 10자리(YYYY-MM-DD)만 추출
-                    r_date = str(r_val)[0:10]
-            except:
-                r_date = ""
+                if pd.isna(r_val) or r_val == "" or str(r_val).lower() == 'nan': r_date = ""
+                else: r_date = str(r_val)[0:10]
+            except: r_date = ""
 
             style = [''] * len(row)
-            
-            # 비교 로직 (날짜가 존재할 때만 비교)
-            if r_date and r_date < today and status in ['대여 중', '현장 출고']:
-                style = ['background-color: #ffcccc'] * len(row)
-            elif status == '대여 중':
-                style = ['background-color: #e65100; color: white'] * len(row) # 진한 주황색
-            elif status == '현장 출고':
-                style = ['background-color: #e3f2fd'] * len(row)
-            elif status == '파손':
-                style = ['background-color: #cfd8dc; color: red'] * len(row)
-            elif status == '수리 중':
-                style = ['background-color: #ffccbc'] * len(row)
-            
+            if r_date and r_date < today and status in ['대여 중', '현장 출고']: style = ['background-color: #ffcccc'] * len(row)
+            elif status == '대여 중': style = ['background-color: #e65100; color: white'] * len(row)
+            elif status == '현장 출고': style = ['background-color: #e3f2fd'] * len(row)
+            elif status == '파손': style = ['background-color: #cfd8dc; color: red'] * len(row)
+            elif status == '수리 중': style = ['background-color: #ffccbc'] * len(row)
             return style
 
         display_df = view_df.drop(columns=['ID'], errors='ignore')
