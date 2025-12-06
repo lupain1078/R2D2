@@ -138,38 +138,21 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-# [수정] 출고증 생성 함수 업그레이드 (현장별 묶음 출력 + 상단 담당자 1회 표기)
 def create_dispatch_ticket_grouped(site_name, items_df, worker):
     output = BytesIO()
-    
-    # 데이터프레임 정리 (필요한 컬럼만)
     display_df = items_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
     display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # 데이터를 5번째 줄부터 작성 (상단에 정보를 넣기 위해)
         display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
-        
-        # 워크시트 가져오기
         ws = writer.sheets['출고증']
-        
-        # 상단 정보 작성 (Row 1~4)
         ws['A1'] = "장비 출고증"
         ws['A1'].font = pd.io.formats.excel.ExcelCell.style_converter({'font': {'bold': True, 'size': 16}})['font']
-        
-        # 현장명, 담당자, 출력일자 (한번만 표시)
         ws['A2'] = f"현장명: {site_name}"
         ws['A3'] = f"출고 담당자: {worker}"
         ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        
-        # 열 너비 조정 (대략적으로)
-        ws.column_dimensions['A'].width = 25 # 장비명
-        ws.column_dimensions['B'].width = 15 # 브랜드
-        ws.column_dimensions['C'].width = 10 # 수량
-        ws.column_dimensions['D'].width = 15 # 출고일
-        ws.column_dimensions['E'].width = 15 # 반납예정일
-        ws.column_dimensions['F'].width = 30 # 비고
-
+        ws.column_dimensions['A'].width = 25; ws.column_dimensions['B'].width = 15; ws.column_dimensions['C'].width = 10
+        ws.column_dimensions['D'].width = 15; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 30
     return output.getvalue()
 
 def request_deletion(item_id, item_name, reason="사용자 요청"):
@@ -205,36 +188,24 @@ def main_app():
                 cur_pw = st.text_input("현재 비밀번호", type="password")
                 new_pw = st.text_input("새 비밀번호", type="password")
                 new_pw_chk = st.text_input("새 비밀번호 확인", type="password")
-                
                 if st.form_submit_button("변경하기"):
-                    if not verify_password(st.session_state.username, cur_pw):
-                        st.error("현재 비밀번호가 일치하지 않습니다.")
-                    elif new_pw != new_pw_chk:
-                        st.error("새 비밀번호가 서로 다릅니다.")
-                    elif not new_pw:
-                        st.error("비밀번호를 입력해주세요.")
-                    else:
-                        change_user_password(st.session_state.username, new_pw)
-                        st.success("변경 완료! 다시 로그인해주세요.")
+                    if not verify_password(st.session_state.username, cur_pw): st.error("현재 비밀번호가 일치하지 않습니다.")
+                    elif new_pw != new_pw_chk: st.error("새 비밀번호가 서로 다릅니다.")
+                    elif not new_pw: st.error("비밀번호를 입력해주세요.")
+                    else: change_user_password(st.session_state.username, new_pw); st.success("변경 완료! 다시 로그인해주세요.")
 
         st.divider()
         with st.expander("📥 데이터 관리"):
             uploaded_file = st.file_uploader("파일 불러오기 (Excel/CSV)", type=['xlsx', 'csv'])
             if uploaded_file and st.button("데이터 덮어쓰기 적용"):
                 try:
-                    if uploaded_file.name.endswith('.csv'):
-                        new_df = pd.read_csv(uploaded_file)
-                    else:
-                        new_df = pd.read_excel(uploaded_file)
-                    
+                    if uploaded_file.name.endswith('.csv'): new_df = pd.read_csv(uploaded_file)
+                    else: new_df = pd.read_excel(uploaded_file)
                     new_df = new_df.fillna("") 
                     for col in FIELD_NAMES:
                         if col not in new_df.columns: new_df[col] = ""
-                    st.session_state.df = new_df
-                    save_data(new_df)
-                    st.success("데이터 로드 완료!"); st.rerun()
+                    st.session_state.df = new_df; save_data(new_df); st.success("데이터 로드 완료!"); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
-            
             if not st.session_state.df.empty:
                 clean_df = st.session_state.df.drop(columns=['ID'], errors='ignore')
                 csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
@@ -278,22 +249,21 @@ def main_app():
                             img_path = os.path.join("images", img_file.name)
                             with open(os.path.join(DATA_DIR, img_path), "wb") as f: f.write(img_file.getbuffer())
                         new_row = {'ID': str(uuid.uuid4()), '타입': new_type, '이름': new_name, '수량': new_count, '브랜드': new_brand, '특이사항': new_note, '대여업체': new_lender, '대여여부': '재고', '대여자': '', '대여일': '', '반납예정일': '', '출고비고': '', '사진': img_path}
-                        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-                        save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
+                        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True); save_data(st.session_state.df); st.success("등록 완료"); st.rerun()
                     else: st.error("이름 필수")
 
         search_q = st.text_input("🔍 재고 검색", placeholder="이름, 브랜드...")
         view_df = st.session_state.df.copy()
         if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
+        # [수정] 색상 표시 로직 변경 (가시성 확보)
         def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d"); status = row['대여여부']
-            r_date = str(row['반납예정일']).strip()
-            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: return ['background-color: #ffcccc'] * len(row)
-            elif status == '대여 중': return ['background-color: #ffb74d'] * len(row)
-            elif status == '현장 출고': return ['background-color: #e3f2fd'] * len(row)
-            elif status == '파손': return ['background-color: #cfd8dc; color: red'] * len(row)
-            elif status == '수리 중': return ['background-color: #ffccbc'] * len(row)
+            today = datetime.now().strftime("%Y-%m-%d"); status = row['대여여부']; r_date = str(row['반납예정일']).strip()
+            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: return ['background-color: #ffcccc'] * len(row) # 연체 (빨강)
+            elif status == '대여 중': return ['background-color: #e65100; color: white'] * len(row) # [수정] 진한 주황색 배경, 흰색 글씨
+            elif status == '현장 출고': return ['background-color: #e3f2fd'] * len(row) # 파랑
+            elif status == '파손': return ['background-color: #cfd8dc; color: red'] * len(row) # 회색 배경, 빨간 글씨
+            elif status == '수리 중': return ['background-color: #ffccbc'] * len(row) # 살구색
             return [''] * len(row)
 
         display_df = view_df.drop(columns=['ID'], errors='ignore')
@@ -305,11 +275,9 @@ def main_app():
             if st.button("삭제 실행"):
                 item_to_del = st.session_state.df.loc[to_delete_idx]
                 if user_role == 'admin':
-                    st.session_state.df = st.session_state.df.drop(to_delete_idx).reset_index(drop=True)
-                    save_data(st.session_state.df); st.success("관리자 권한 삭제 완료"); st.rerun()
+                    st.session_state.df = st.session_state.df.drop(to_delete_idx).reset_index(drop=True); save_data(st.session_state.df); st.success("관리자 권한 삭제 완료"); st.rerun()
                 else:
-                    request_deletion(item_to_del['ID'], item_to_del['이름'])
-                    st.info("관리자에게 삭제 승인을 요청했습니다.")
+                    request_deletion(item_to_del['ID'], item_to_del['이름']); st.info("관리자에게 삭제 승인을 요청했습니다.")
 
     # 2. 외부 대여
     with tabs[1]:
@@ -317,7 +285,6 @@ def main_app():
         rent_search = st.text_input("🔍 검색", key="rent_s")
         stock = st.session_state.df[st.session_state.df['대여여부'] == '재고']
         if rent_search: stock = stock[stock.apply(lambda row: row.astype(str).str.contains(rent_search, case=False).any(), axis=1)]
-        
         if stock.empty: st.info("재고 없음")
         else:
             rent_opts = stock.apply(lambda x: f"{x['이름']} ({x['수량']}개)", axis=1)
@@ -349,7 +316,6 @@ def main_app():
         disp_search = st.text_input("🔍 검색", key="disp_s")
         stock = st.session_state.df[st.session_state.df['대여여부'] == '재고']
         if disp_search: stock = stock[stock.apply(lambda row: row.astype(str).str.contains(disp_search, case=False).any(), axis=1)]
-        
         if stock.empty: st.info("재고 없음")
         else:
             disp_opts = stock.apply(lambda x: f"{x['이름']} ({x['수량']}개)", axis=1)
@@ -357,7 +323,6 @@ def main_app():
             if sel is not None:
                 item = st.session_state.df.loc[sel]
                 with st.form("disp"):
-                    # [수정] 현장명 입력 안내 명확화
                     tgt = st.text_input("현장명"); c1, c2, c3 = st.columns(3)
                     q = c1.number_input("수량", 1, int(item['수량']), 1); d1 = c2.date_input("출고일"); d2 = c3.date_input("반납예정일(필수)", value=None); note = st.text_input("비고")
                     if st.form_submit_button("출고"):
@@ -371,34 +336,21 @@ def main_app():
                                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_r])], ignore_index=True)
                             else:
                                 st.session_state.df.at[sel, '대여여부'] = '현장 출고'; st.session_state.df.at[sel, '대여자'] = tgt; st.session_state.df.at[sel, '대여일'] = d1s; st.session_state.df.at[sel, '반납예정일'] = d2s; st.session_state.df.at[sel, '출고비고'] = note
-                            log_transaction("현장출고", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df)
-                            st.success("출고 완료"); st.rerun()
+                            log_transaction("현장출고", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df); st.success("출고 완료"); st.rerun()
 
         st.write("---")
         st.write("#### 📋 현장별 현황 (출고증 통합 다운로드)")
-        
-        # [수정] 현장별 필터 및 통합 다운로드 기능
         cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
         if not cur_disp.empty:
             sites = ["선택하세요"] + list(cur_disp['대여자'].unique())
             s_site = st.selectbox("현장 선택 (출고증을 뽑으려면 선택하세요)", sites)
-            
             if s_site != "선택하세요":
                 site_data = cur_disp[cur_disp['대여자'] == s_site]
-                # 컬럼명도 UI에 맞게 '현장명'으로 표시
                 display_table = site_data[['대여자', '이름', '수량', '반납예정일', '출고비고']].rename(columns={'대여자': '현장명'})
                 st.dataframe(display_table, use_container_width=True)
-                
-                # [수정] 통합 출고증 다운로드 버튼
                 ticket_data = create_dispatch_ticket_grouped(s_site, site_data, st.session_state.username)
-                st.download_button(
-                    label=f"📄 [{s_site}] 전체 출고증 다운로드",
-                    data=ticket_data,
-                    file_name=f"dispatch_ticket_{s_site}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        else:
-            st.info("출고된 장비가 없습니다.")
+                st.download_button(label=f"📄 [{s_site}] 전체 출고증 다운로드", data=ticket_data, file_name=f"dispatch_ticket_{s_site}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else: st.info("출고된 장비가 없습니다.")
 
     # 4. 반납
     with tabs[3]:
@@ -408,7 +360,6 @@ def main_app():
         if ret_s: ret_df = ret_df[ret_df.apply(lambda row: row.astype(str).str.contains(ret_s, case=False).any(), axis=1)]
         if ret_df.empty: st.info("대상 없음")
         else:
-            # 여기도 '현장명'으로 표시되도록 수정
             opts = ret_df.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']}", axis=1)
             sel = st.selectbox("선택", options=opts.index, format_func=lambda x: opts[x], key="ret_sel")
             if sel is not None:
@@ -458,19 +409,15 @@ def main_app():
         if os.path.exists(LOG_FILE_NAME):
             log_df = pd.read_csv(LOG_FILE_NAME)
             log_df = log_df.iloc[::-1] # 최신순
-            
             if user_role == 'admin':
                 st.warning("⚠️ 관리자 권한: 내역 삭제 가능")
                 if '선택' not in log_df.columns: log_df.insert(0, "선택", False)
                 if st.checkbox("✅ 전체 선택"): log_df['선택'] = True
-                
                 edited_df = st.data_editor(log_df, hide_index=True, use_container_width=True)
                 if st.button("선택한 내역 영구 삭제"):
                     remaining_df = edited_df[edited_df['선택'] == False].drop(columns=['선택'])
-                    remaining_df.to_csv(LOG_FILE_NAME, index=False)
-                    st.success("삭제 완료"); st.rerun()
-            else:
-                st.dataframe(log_df, use_container_width=True)
+                    remaining_df.to_csv(LOG_FILE_NAME, index=False); st.success("삭제 완료"); st.rerun()
+            else: st.dataframe(log_df, use_container_width=True)
             csv_d = log_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
@@ -479,27 +426,19 @@ def main_app():
     if user_role == 'admin':
         with tabs[6]:
             st.subheader("👑 관리자 페이지")
-            
             st.write("#### 👥 전체 회원 관리 (탈퇴)")
             users = get_all_users()
             approved_users = users[users['approved'] == True]
-            
-            if approved_users.empty:
-                st.info("승인된 회원이 없습니다.")
+            if approved_users.empty: st.info("승인된 회원이 없습니다.")
             else:
                 for idx, row in approved_users.iterrows():
                     if row['role'] == 'admin': continue
-                    
                     c1, c2, c3 = st.columns([3, 2, 1])
                     c1.write(f"👤 **{row['username']}** (생일: {row['birthdate']})")
                     c2.caption(f"가입일: {row['created_at']}")
                     if c3.button("추방(탈퇴)", key=f"kick_{idx}"):
-                        update_user_status(row['username'], "delete")
-                        st.warning(f"{row['username']} 님을 탈퇴시켰습니다.")
-                        st.rerun()
-
+                        update_user_status(row['username'], "delete"); st.warning(f"{row['username']} 님을 탈퇴시켰습니다."); st.rerun()
             st.divider()
-
             st.write("#### ⏳ 승인 대기")
             pending = users[users['approved'] == False]
             if pending.empty: st.info("대기 없음")
@@ -509,7 +448,6 @@ def main_app():
                     c1.write(f"**{row['username']}** (생일: {row['birthdate']})")
                     if c3.button("승인", key=f"ok_{idx}"): update_user_status(row['username'], "approve"); st.rerun()
                     if c4.button("거절", key=f"no_{idx}"): update_user_status(row['username'], "delete"); st.rerun()
-            
             st.divider()
             st.write("#### 🗑️ 삭제 요청 목록")
             if os.path.exists(DEL_REQ_FILE_NAME):
@@ -521,13 +459,10 @@ def main_app():
                             st.write(f"사유: {row['reason']}")
                             c1, c2 = st.columns(2)
                             if c1.button("승인(삭제)", key=f"del_ok_{row['req_id']}"):
-                                st.session_state.df = st.session_state.df[st.session_state.df['ID'] != row['item_id']]
-                                save_data(st.session_state.df)
-                                reqs = reqs[reqs['req_id'] != row['req_id']]; reqs.to_csv(DEL_REQ_FILE_NAME, index=False)
-                                st.success("삭제됨"); st.rerun()
+                                st.session_state.df = st.session_state.df[st.session_state.df['ID'] != row['item_id']]; save_data(st.session_state.df)
+                                reqs = reqs[reqs['req_id'] != row['req_id']]; reqs.to_csv(DEL_REQ_FILE_NAME, index=False); st.success("삭제됨"); st.rerun()
                             if c2.button("반려", key=f"del_no_{row['req_id']}"):
-                                reqs = reqs[reqs['req_id'] != row['req_id']]; reqs.to_csv(DEL_REQ_FILE_NAME, index=False)
-                                st.warning("반려됨"); st.rerun()
+                                reqs = reqs[reqs['req_id'] != row['req_id']]; reqs.to_csv(DEL_REQ_FILE_NAME, index=False); st.warning("반려됨"); st.rerun()
 
 def login_page():
     st.title("🔒 통합 장비 관리 시스템")
@@ -537,8 +472,7 @@ def login_page():
             id_in = st.text_input("아이디"); pw_in = st.text_input("비밀번호", type="password")
             if st.form_submit_button("로그인"):
                 succ, msg, role = login_user(id_in, pw_in)
-                if succ:
-                    st.session_state.logged_in = True; st.session_state.username = id_in; st.session_state.role = role; st.rerun()
+                if succ: st.session_state.logged_in = True; st.session_state.username = id_in; st.session_state.role = role; st.rerun()
                 else: st.error(msg)
     with t2:
         st.info("관리자 승인 필요")
@@ -556,4 +490,4 @@ if __name__ == '__main__':
     init_user_db()
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
     if st.session_state.logged_in: main_app()
-    else: login_page()
+    else: login_page() 
