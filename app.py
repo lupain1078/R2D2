@@ -17,16 +17,17 @@ st.set_page_config(page_title="통합 장비 관리 시스템", layout="wide", p
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = BASE_DIR
 IMG_DIR = os.path.join(DATA_DIR, 'images')
+# [추가] 실제 엑셀 파일이 저장될 폴더
+TICKETS_DIR = os.path.join(DATA_DIR, 'tickets')
 
-if not os.path.exists(IMG_DIR):
-    os.makedirs(IMG_DIR)
+if not os.path.exists(IMG_DIR): os.makedirs(IMG_DIR)
+if not os.path.exists(TICKETS_DIR): os.makedirs(TICKETS_DIR)
 
 FILE_NAME = os.path.join(DATA_DIR, 'equipment_data.csv')
 LOG_FILE_NAME = os.path.join(DATA_DIR, 'transaction_log.csv')
 USER_FILE_NAME = os.path.join(DATA_DIR, 'users.csv')
 DEL_REQ_FILE_NAME = os.path.join(DATA_DIR, 'deletion_requests.csv')
-# [추가] 출고증 보관용 CSV 파일
-TICKET_HISTORY_FILE = os.path.join(DATA_DIR, 'ticket_history.csv') 
+TICKET_HISTORY_FILE = os.path.join(DATA_DIR, 'ticket_history.csv')
 BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
@@ -62,9 +63,9 @@ def init_user_db():
                 df.to_csv(USER_FILE_NAME, index=False)
         except: pass
 
-    # [추가] 출고증 보관함 초기화
+    # 보관함 DB 초기화 (파일명 컬럼 추가)
     if not os.path.exists(TICKET_HISTORY_FILE):
-        df_ticket = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_data'])
+        df_ticket = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
         df_ticket.to_csv(TICKET_HISTORY_FILE, index=False)
 
 def register_user(username, password, birthdate):
@@ -172,24 +173,27 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             ws.column_dimensions['D'].width = 15; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 30
     return output.getvalue()
 
-# [추가] 출고증 보관함 저장 함수
+# [수정] 출고증 파일 저장 및 이력 기록
 def save_ticket_history(site_names_str, file_data):
-    # CSV에 바이너리 데이터를 직접 저장하면 깨질 수 있으므로, 별도 폴더에 엑셀 저장하고 CSV엔 경로만 저장하거나
-    # 여기서는 간단하게 메타데이터만 저장하고, 다운로드는 현재 시점의 데이터로 재생성하는 방식을 쓰거나
-    # 혹은 요청하신대로 '저장된 시점'의 파일을 복원하려면 파일을 따로 저장해야 함.
-    # Streamlit Cloud 특성상 파일 저장이 휘발될 수 있으므로, 여기서는 '발급 기록'만 남기는 방식으로 구현합니다.
-    # (실제 파일 저장은 S3나 DB가 필요하지만, 간편한 구현을 위해 기록만 남기고 필요시 재생성)
-    
     if not os.path.exists(TICKET_HISTORY_FILE):
-        df = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at'])
+        df = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
     else:
         df = pd.read_csv(TICKET_HISTORY_FILE)
+    
+    # 파일 이름 생성 (중복 방지용 UUID 사용)
+    file_name = f"ticket_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.xlsx"
+    file_path = os.path.join(TICKETS_DIR, file_name)
+    
+    # 실제 파일 저장
+    with open(file_path, "wb") as f:
+        f.write(file_data)
     
     new_record = {
         'ticket_id': str(uuid.uuid4()),
         'site_names': site_names_str,
         'writer': st.session_state.username,
-        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'file_path': file_name # 파일명만 저장
     }
     
     df = pd.concat([df, pd.DataFrame([new_record])], ignore_index=True)
@@ -264,7 +268,6 @@ def main_app():
 
     st.divider()
 
-    # [수정] 탭 메뉴에 '출고증 보관함' 추가
     tab_titles = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리", "🗂️ 출고증 보관함"]
     if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
@@ -272,6 +275,7 @@ def main_app():
     # 1. 재고 관리
     with tabs[0]:
         st.subheader("장비 관리")
+        
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns([1, 2, 1])
@@ -430,7 +434,6 @@ def main_app():
             
             if s_sites:
                 site_tabs = st.tabs(s_sites)
-                
                 for i, site in enumerate(s_sites):
                     with site_tabs[i]:
                         site_data = cur_disp[cur_disp['대여자'] == site]
@@ -441,43 +444,86 @@ def main_app():
                 st.write("")
                 ticket_data = create_dispatch_ticket_multisheet(s_sites, cur_disp, st.session_state.username)
                 
-                # [수정] 출고증 발급 시 기록 저장
                 if st.download_button(label=f"📄 선택한 {len(s_sites)}개 현장 출고증 다운로드 (Excel)", data=ticket_data, file_name=f"dispatch_tickets_combined.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
-                    # 다운로드 버튼 클릭 시 기록
                     save_ticket_history(", ".join(s_sites), ticket_data)
-                    st.success("출고증이 다운로드 되었습니다! (보관함에 자동 저장됨)")
+                    st.success("출고증이 다운로드 및 보관함에 저장되었습니다.")
         else: st.info("출고된 장비가 없습니다.")
 
-    # 4. 반납
+    # 4. 반납 (현장 전체 반납 기능 추가)
     with tabs[3]:
         st.subheader("📥 반납")
-        ret_s = st.text_input("🔍 검색", key="ret_s")
-        ret_df = st.session_state.df[st.session_state.df['대여여부'].isin(['대여 중', '현장 출고'])]
-        if ret_s: ret_df = ret_df[ret_df.apply(lambda row: row.astype(str).str.contains(ret_s, case=False).any(), axis=1)]
-        if ret_df.empty: st.info("대상 없음")
-        else:
-            opts = ret_df.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']}", axis=1)
-            sel = st.selectbox("선택", options=opts.index, format_func=lambda x: opts[x], key="ret_sel")
-            if sel is not None:
-                item = st.session_state.df.loc[sel]
-                with st.form("ret"):
-                    q = st.number_input("수량", 1, int(item['수량']), int(item['수량']))
-                    if st.form_submit_button("반납"):
-                        mask = ((st.session_state.df['이름'] == item['이름']) & (st.session_state.df['브랜드'] == item['브랜드']) & (st.session_state.df['대여여부'] == '재고'))
-                        m_idx = st.session_state.df[mask].index
-                        if q < item['수량']:
-                            st.session_state.df.at[sel, '수량'] -= q
-                            if not m_idx.empty: st.session_state.df.at[m_idx[0], '수량'] += q
+        
+        # 반납 방식 선택
+        return_method = st.radio("반납 방식 선택", ["개별 반납 (기존 방식)", "🏢 현장 전체 반납 (일괄 처리)"], horizontal=True)
+        
+        if return_method == "개별 반납 (기존 방식)":
+            ret_s = st.text_input("🔍 검색", key="ret_s")
+            ret_df = st.session_state.df[st.session_state.df['대여여부'].isin(['대여 중', '현장 출고'])]
+            if ret_s: ret_df = ret_df[ret_df.apply(lambda row: row.astype(str).str.contains(ret_s, case=False).any(), axis=1)]
+            if ret_df.empty: st.info("대상 없음")
+            else:
+                opts = ret_df.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']}", axis=1)
+                sel = st.selectbox("선택", options=opts.index, format_func=lambda x: opts[x], key="ret_sel")
+                if sel is not None:
+                    item = st.session_state.df.loc[sel]
+                    with st.form("ret"):
+                        q = st.number_input("수량", 1, int(item['수량']), int(item['수량']))
+                        if st.form_submit_button("반납"):
+                            mask = ((st.session_state.df['이름'] == item['이름']) & (st.session_state.df['브랜드'] == item['브랜드']) & (st.session_state.df['대여여부'] == '재고'))
+                            m_idx = st.session_state.df[mask].index
+                            if q < item['수량']:
+                                st.session_state.df.at[sel, '수량'] -= q
+                                if not m_idx.empty: st.session_state.df.at[m_idx[0], '수량'] += q
+                                else:
+                                    new_r = item.copy(); new_r['ID'] = str(uuid.uuid4()); new_r['수량'] = q; new_r['대여여부'] = '재고'; new_r['대여자'] = ''
+                                    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_r])], ignore_index=True)
                             else:
-                                new_r = item.copy(); new_r['ID'] = str(uuid.uuid4()); new_r['수량'] = q; new_r['대여여부'] = '재고'; new_r['대여자'] = ''
-                                st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_r])], ignore_index=True)
-                        else:
+                                if not m_idx.empty:
+                                    st.session_state.df.at[m_idx[0], '수량'] += q
+                                    st.session_state.df = st.session_state.df.drop(sel).reset_index(drop=True)
+                                else:
+                                    st.session_state.df.at[sel, '대여여부'] = '재고'; st.session_state.df.at[sel, '대여자'] = ''
+                            log_transaction("반납", item['이름'], q, item['대여자'], datetime.now().strftime("%Y-%m-%d")); save_data(st.session_state.df); st.success("완료"); st.rerun()
+        
+        else: # [추가] 현장 전체 반납 로직
+            cur_disp_all = st.session_state.df[st.session_state.df['대여여부'].isin(['대여 중', '현장 출고'])]
+            if cur_disp_all.empty:
+                st.info("반납할 내역이 없습니다.")
+            else:
+                site_list = list(cur_disp_all['대여자'].unique())
+                selected_site_ret = st.selectbox("반납할 현장/업체 선택", site_list)
+                
+                if selected_site_ret:
+                    target_items = cur_disp_all[cur_disp_all['대여자'] == selected_site_ret]
+                    st.write(f"▼ {selected_site_ret} 현장에서 반납될 장비 목록 ({len(target_items)}건)")
+                    st.dataframe(target_items[['이름', '수량', '반납예정일']], use_container_width=True)
+                    
+                    if st.button(f"🚨 {selected_site_ret} 현장 전체 반납 실행 (되돌릴 수 없음)"):
+                        # 해당 현장의 모든 아이템을 순회하며 반납 처리
+                        for idx, row in target_items.iterrows():
+                            # 재고 합치기 로직 적용
+                            mask = ((st.session_state.df['이름'] == row['이름']) & 
+                                    (st.session_state.df['브랜드'] == row['브랜드']) & 
+                                    (st.session_state.df['대여여부'] == '재고'))
+                            m_idx = st.session_state.df[mask].index
+                            
                             if not m_idx.empty:
-                                st.session_state.df.at[m_idx[0], '수량'] += q
-                                st.session_state.df = st.session_state.df.drop(sel).reset_index(drop=True)
+                                # 기존 재고에 수량 합치고, 현재 행 삭제
+                                st.session_state.df.at[m_idx[0], '수량'] += row['수량']
+                                st.session_state.df = st.session_state.df.drop(idx)
                             else:
-                                st.session_state.df.at[sel, '대여여부'] = '재고'; st.session_state.df.at[sel, '대여자'] = ''
-                        log_transaction("반납", item['이름'], q, item['대여자'], datetime.now().strftime("%Y-%m-%d")); save_data(st.session_state.df); st.success("완료"); st.rerun()
+                                # 재고가 없으면 상태만 '재고'로 변경하고 대여자 정보 초기화
+                                st.session_state.df.at[idx, '대여여부'] = '재고'
+                                st.session_state.df.at[idx, '대여자'] = ''
+                                st.session_state.df.at[idx, '대여일'] = ''
+                                st.session_state.df.at[idx, '반납예정일'] = ''
+                                st.session_state.df.at[idx, '출고비고'] = ''
+                        
+                        # 인덱스 재정렬 및 저장
+                        st.session_state.df = st.session_state.df.reset_index(drop=True)
+                        save_data(st.session_state.df)
+                        log_transaction("전체반납", "다수", 0, selected_site_ret, datetime.now().strftime("%Y-%m-%d"))
+                        st.success(f"{selected_site_ret} 현장의 모든 장비가 반납되었습니다."); st.rerun()
 
     # 5. 수리/파손
     with tabs[4]:
@@ -518,32 +564,46 @@ def main_app():
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # [신규] 7. 출고증 보관함 (검색 기능 포함)
+    # [신규] 7. 출고증 보관함 (재다운로드 및 검색)
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
         
         if os.path.exists(TICKET_HISTORY_FILE):
             hist_df = pd.read_csv(TICKET_HISTORY_FILE)
-            hist_df = hist_df.iloc[::-1] # 최신순
+            hist_df = hist_df.iloc[::-1] # 최신순 정렬
             
             # 검색 필터
-            c_search1, c_search2, c_search3 = st.columns(3)
-            search_site = c_search1.text_input("🔍 현장명 검색")
-            search_date = c_search2.text_input("🔍 날짜 검색 (YYYY-MM-DD)")
-            search_writer = c_search3.text_input("🔍 작성자 검색")
+            c_s1, c_s2, c_s3 = st.columns(3)
+            s_site = c_s1.text_input("🔍 현장명 검색")
+            s_date = c_s2.text_input("🔍 날짜 검색 (YYYY-MM-DD)")
+            s_writer = c_s3.text_input("🔍 작성자 검색")
             
-            if search_site: hist_df = hist_df[hist_df['site_names'].str.contains(search_site, case=False)]
-            if search_date: hist_df = hist_df[hist_df['created_at'].str.contains(search_date, case=False)]
-            if search_writer: hist_df = hist_df[hist_df['writer'].str.contains(search_writer, case=False)]
+            if s_site: hist_df = hist_df[hist_df['site_names'].str.contains(s_site, case=False, na=False)]
+            if s_date: hist_df = hist_df[hist_df['created_at'].str.contains(s_date, case=False, na=False)]
+            if s_writer: hist_df = hist_df[hist_df['writer'].str.contains(s_writer, case=False, na=False)]
             
             if not hist_df.empty:
+                # 데이터 표시
                 st.dataframe(hist_df[['site_names', 'writer', 'created_at']], use_container_width=True)
                 
-                # 재다운로드 로직 (지금은 데이터 재생성은 어렵고, 기록 확인용으로만 구현됨)
-                # 실제 파일 내용을 저장하려면 DB나 S3가 필요하지만, 
-                # 여기서는 '발급했다'는 사실을 기록하는 용도로 사용하고, 
-                # 만약 현재 상태 기준으로 다시 뽑고 싶다면 '현장 출고' 탭에서 다시 뽑아야 함을 안내.
-                st.info("💡 참고: 이곳은 발급 이력을 보여주는 곳입니다. 똑같은 파일을 다시 받으려면 '현장 출고' 탭에서 해당 현장을 선택해 다시 다운로드해주세요.")
+                # 재다운로드 섹션
+                st.write("#### 💾 파일 재다운로드")
+                selected_ticket = st.selectbox("다운로드할 출고증을 선택하세요", hist_df.index, format_func=lambda i: f"{hist_df.loc[i, 'created_at']} - {hist_df.loc[i, 'site_names']}")
+                
+                if selected_ticket is not None:
+                    file_name = hist_df.loc[selected_ticket, 'file_path']
+                    file_path = os.path.join(TICKETS_DIR, file_name)
+                    
+                    if os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            st.download_button(
+                                label="📥 선택한 출고증 다운로드",
+                                data=f,
+                                file_name=file_name,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    else:
+                        st.error("⚠️ 해당 파일이 서버에서 삭제되었습니다. (서버 재시작시 초기화될 수 있음)")
             else:
                 st.info("검색 결과가 없습니다.")
         else:
