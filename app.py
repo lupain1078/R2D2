@@ -270,7 +270,7 @@ def main_app():
             if not st.session_state.df.empty:
                 clean_df = st.session_state.df.drop(columns=['ID'], errors='ignore')
                 csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("💾 장비 목록 백업", csv_data, "equipment_list.csv", "text/csv")
+                st.download_button("💾 장비 목록 백업 (ID 제외)", csv_data, "equipment_list.csv", "text/csv")
 
     col_h1, col_h2 = st.columns([8, 2])
     col_h1.title("🛠️ 통합 장비 관리 시스템")
