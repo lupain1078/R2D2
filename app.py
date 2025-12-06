@@ -19,6 +19,7 @@ DATA_DIR = BASE_DIR
 IMG_DIR = os.path.join(DATA_DIR, 'images')
 TICKETS_DIR = os.path.join(DATA_DIR, 'tickets')
 
+# 폴더가 없으면 생성
 if not os.path.exists(IMG_DIR): os.makedirs(IMG_DIR)
 if not os.path.exists(TICKETS_DIR): os.makedirs(TICKETS_DIR)
 
@@ -32,13 +33,14 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수
+# 2. 회원 및 데이터 처리 함수 (자동 복구 기능 강화)
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
+    # 1. 유저 DB 초기화 및 복구
     if not os.path.exists(USER_FILE_NAME):
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
@@ -55,6 +57,7 @@ def init_user_db():
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
     else:
+        # [자동 복구] birthdate 컬럼이 없으면 추가
         try:
             df = pd.read_csv(USER_FILE_NAME)
             if 'birthdate' not in df.columns:
@@ -62,14 +65,16 @@ def init_user_db():
                 df.to_csv(USER_FILE_NAME, index=False)
         except: pass
 
+    # 2. 출고증 기록 DB 초기화 및 복구
     if not os.path.exists(TICKET_HISTORY_FILE):
         df_ticket = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
         df_ticket.to_csv(TICKET_HISTORY_FILE, index=False)
     else:
+        # [자동 복구] file_path 컬럼이 없으면 추가 (KeyError 방지)
         try:
             df_th = pd.read_csv(TICKET_HISTORY_FILE)
             if 'file_path' not in df_th.columns:
-                df_th['file_path'] = ""
+                df_th['file_path'] = "" # 빈 값으로 컬럼 추가
                 df_th.to_csv(TICKET_HISTORY_FILE, index=False)
         except: pass
 
@@ -157,6 +162,7 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
+# 엑셀 생성 (openpyxl)
 def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -167,10 +173,12 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             display_df = site_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
             display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
             
+            # 시트 이름 안전하게 처리
             sheet_title = str(site)[:30].replace("/", "_").replace("\\", "_")
             display_df.to_excel(writer, index=False, sheet_name=sheet_title, startrow=4)
             ws = writer.sheets[sheet_title]
             
+            # 스타일 적용
             title_font = Font(bold=True, size=16)
             ws['A1'] = f"장비 출고증 ({site})"
             ws['A1'].font = title_font
@@ -188,6 +196,7 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
 
 def save_ticket_history(site_names_str, file_data):
     init_user_db()
+    
     if not os.path.exists(TICKET_HISTORY_FILE):
         df = pd.DataFrame(columns=['ticket_id', 'site_names', 'writer', 'created_at', 'file_path'])
     else:
@@ -233,7 +242,8 @@ def main_app():
 
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
-        st.caption(f"권한: {'👑 관리자' if user_role == 'admin' else '일반 사용자'}")
+        # [수정 4] 권한 표시 변경: 일반 사용자 -> 직원
+        st.caption(f"권한: {'👑 관리자' if user_role == 'admin' else '직원'}")
         
         st.divider()
         with st.expander("🔒 비밀번호 변경"):
@@ -262,7 +272,8 @@ def main_app():
             if not st.session_state.df.empty:
                 clean_df = st.session_state.df.drop(columns=['ID'], errors='ignore')
                 csv_data = clean_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("💾 장비 목록 백업 (ID 제외)", csv_data, "equipment_list.csv", "text/csv")
+                # [수정 2] 버튼 이름 변경: (ID 제외) 삭제
+                st.download_button("💾 장비 목록 백업", csv_data, "equipment_list.csv", "text/csv")
 
     col_h1, col_h2 = st.columns([8, 2])
     col_h1.title("🛠️ 통합 장비 관리 시스템")
@@ -285,6 +296,7 @@ def main_app():
     # 1. 재고 관리
     with tabs[0]:
         st.subheader("장비 관리")
+        
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns([1, 2, 1])
@@ -325,11 +337,16 @@ def main_app():
             except: r_date = ""
 
             style = [''] * len(row)
-            if r_date and r_date < today and status in ['대여 중', '현장 출고']: style = ['background-color: #B71C1C; color: white'] * len(row)
-            elif status == '대여 중': style = ['background-color: #E65100; color: white'] * len(row)
-            elif status == '현장 출고': style = ['background-color: #1565C0; color: white'] * len(row)
-            elif status == '파손': style = ['background-color: #455A64; color: white'] * len(row)
-            elif status == '수리 중': style = ['background-color: #6A1B9A; color: white'] * len(row)
+            if r_date and r_date < today and status in ['대여 중', '현장 출고']: 
+                style = ['background-color: #B71C1C; color: white'] * len(row)
+            elif status == '대여 중': 
+                style = ['background-color: #E65100; color: white'] * len(row)
+            elif status == '현장 출고': 
+                style = ['background-color: #1565C0; color: white'] * len(row)
+            elif status == '파손': 
+                style = ['background-color: #455A64; color: white'] * len(row)
+            elif status == '수리 중': 
+                style = ['background-color: #6A1B9A; color: white'] * len(row)
             return style
 
         system_cols = ["ID", "대여여부", "대여자", "대여일", "반납예정일", "출고비고", "사진"]
@@ -358,7 +375,8 @@ def main_app():
         if not view_df.empty:
             del_opts = view_df.apply(lambda x: f"{x['이름']} ({x['브랜드']})", axis=1)
             to_delete_idx = st.selectbox("🗑️ 삭제 요청/처리 선택", options=del_opts.index, format_func=lambda x: del_opts[x])
-            if st.button("삭제 실행"):
+            # [수정 1] 버튼 이름 변경: 삭제 실행 -> 삭제 요청
+            if st.button("삭제 요청"):
                 item_to_del = st.session_state.df.loc[to_delete_idx]
                 if user_role == 'admin':
                     st.session_state.df = st.session_state.df.drop(to_delete_idx).reset_index(drop=True); save_data(st.session_state.df); st.success("관리자 권한 삭제 완료"); st.rerun()
@@ -430,6 +448,7 @@ def main_app():
 
         st.write("---")
         st.write("#### 📋 현장별 현황 (다중 선택 및 통합 다운로드)")
+        
         cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
         if not cur_disp.empty:
             all_sites = list(cur_disp['대여자'].unique())
@@ -446,6 +465,7 @@ def main_app():
                 
                 st.write("")
                 ticket_data = create_dispatch_ticket_multisheet(s_sites, cur_disp, st.session_state.username)
+                
                 if st.download_button(label=f"📄 선택한 {len(s_sites)}개 현장 출고증 다운로드 (Excel)", data=ticket_data, file_name=f"dispatch_tickets_combined.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     save_ticket_history(", ".join(s_sites), ticket_data)
                     st.success("출고증이 다운로드 및 보관함에 저장되었습니다.")
@@ -532,7 +552,7 @@ def main_app():
                         if stat == '재고': st.session_state.df.at[sel, '대여자'] = ''
                         log_transaction(f"상태변경({stat})", item['이름'], q, stat, datetime.now().strftime("%Y-%m-%d")); save_data(st.session_state.df); st.success("완료"); st.rerun()
 
-    # 6. 내역 관리 (체크박스 너비 수정)
+    # 6. 내역 관리
     with tabs[5]:
         st.subheader("📜 내역 관리")
         if os.path.exists(LOG_FILE_NAME):
@@ -543,7 +563,6 @@ def main_app():
                 if '선택' not in log_df.columns: log_df.insert(0, "선택", False)
                 if st.checkbox("✅ 전체 선택"): log_df['선택'] = True
                 
-                # [수정] 체크박스 너비 50px로 고정
                 edited_df = st.data_editor(
                     log_df,
                     hide_index=True,
@@ -560,59 +579,53 @@ def main_app():
             st.download_button("내역 다운로드 (CSV)", csv_d, "history.csv", "text/csv")
         else: st.info("기록 없음")
 
-    # 7. 출고증 보관함 (에러 방지 및 UI 개선)
+    # 7. 출고증 보관함
     with tabs[6]:
         st.subheader("🗂️ 출고증 발급 이력 (보관함)")
+        
         if os.path.exists(TICKET_HISTORY_FILE):
-            # [수정] 필요한 컬럼만 로드하여 불필요한 데이터 제거
-            full_hist_df = pd.read_csv(TICKET_HISTORY_FILE)
-            valid_cols = ['ticket_id', 'site_names', 'writer', 'created_at', 'file_path']
-            # 없는 컬럼은 무시하고 있는 것만 선택
-            actual_cols = [c for c in valid_cols if c in full_hist_df.columns]
-            full_hist_df = full_hist_df[actual_cols]
+            hist_df = pd.read_csv(TICKET_HISTORY_FILE).iloc[::-1]
             
-            display_df = full_hist_df.iloc[::-1].copy()
-            
-            c1, c2, c3 = st.columns(3)
-            search_site = c1.text_input("🔍 현장명 검색", key="h_site")
-            search_date = c2.text_input("🔍 날짜 검색", key="h_date")
-            search_writer = c3.text_input("🔍 작성자 검색", key="h_writer")
-            
-            if search_site: display_df = display_df[display_df['site_names'].str.contains(search_site, case=False, na=False)]
-            if search_date: display_df = display_df[display_df['created_at'].str.contains(search_date, case=False, na=False)]
-            if search_writer: display_df = display_df[display_df['writer'].str.contains(search_writer, case=False, na=False)]
-            
-            if not display_df.empty:
-                if user_role == 'admin':
-                    st.write("#### ⚠️ 관리자 삭제 모드")
-                    if '선택' not in display_df.columns: display_df.insert(0, '선택', False)
-                    if st.checkbox("✅ 전체 선택 (현재 목록)"): display_df['선택'] = True
-                    
-                    # [수정] 체크박스 너비 50px로 고정
-                    edited_del = st.data_editor(
-                        display_df,
-                        column_config={
-                            "ticket_id": None, "file_path": None,
-                            "선택": st.column_config.CheckboxColumn("삭제", width=50)
-                        },
-                        hide_index=True, use_container_width=True, key="del_editor"
-                    )
-                    
-                    if st.button("🗑️ 체크한 항목 영구 삭제"):
-                        to_delete = edited_del[edited_del['선택']]
-                        if not to_delete.empty:
-                            for fname in to_delete['file_path']:
-                                if isinstance(fname, str) and fname:
-                                    try: os.remove(os.path.join(TICKETS_DIR, fname))
-                                    except: pass
-                            
-                            # ID 기준으로 삭제 (인덱스 아님)
-                            new_df = full_hist_df[~full_hist_df['ticket_id'].isin(to_delete['ticket_id'])]
-                            new_df.to_csv(TICKET_HISTORY_FILE, index=False)
-                            st.success("삭제 완료"); st.rerun()
-                    st.divider()
+            if user_role == 'admin':
+                st.write("#### ⚠️ 관리자 삭제 모드")
+                if '선택' not in hist_df.columns: hist_df.insert(0, '선택', False)
+                if st.checkbox("✅ 전체 선택 (현재 목록)"): hist_df['선택'] = True
+                
+                edited_del = st.data_editor(
+                    hist_df[['선택', 'site_names', 'writer', 'created_at', 'ticket_id', 'file_path']], 
+                    column_config={
+                        "ticket_id": None, "file_path": None,
+                        "선택": st.column_config.CheckboxColumn("삭제", width=50)
+                    },
+                    hide_index=True, use_container_width=True, key="del_editor"
+                )
+                
+                if st.button("🗑️ 체크한 항목 영구 삭제"):
+                    to_delete = edited_del[edited_del['선택']]
+                    if not to_delete.empty:
+                        for fname in to_delete['file_path']:
+                            if isinstance(fname, str) and fname:
+                                try: os.remove(os.path.join(TICKETS_DIR, fname))
+                                except: pass
+                        
+                        full_hist_df = pd.read_csv(TICKET_HISTORY_FILE)
+                        new_df = full_hist_df[~full_hist_df['ticket_id'].isin(to_delete['ticket_id'])]
+                        new_df.to_csv(TICKET_HISTORY_FILE, index=False)
+                        st.success("삭제 완료"); st.rerun()
+                st.divider()
 
-                st.write("#### 📄 발급 목록")
+            st.write("#### 📄 발급 목록")
+            c1, c2, c3 = st.columns(3)
+            s_site = c1.text_input("🔍 현장명 검색", key="h_site")
+            s_date = c2.text_input("🔍 날짜 검색", key="h_date")
+            s_writer = c3.text_input("🔍 작성자 검색", key="h_writer")
+            
+            view_df = hist_df.copy()
+            if s_site: view_df = view_df[view_df['site_names'].str.contains(s_site, case=False, na=False)]
+            if s_date: view_df = view_df[view_df['created_at'].str.contains(s_date, case=False, na=False)]
+            if s_writer: view_df = view_df[view_df['writer'].str.contains(s_writer, case=False, na=False)]
+            
+            if not view_df.empty:
                 h1, h2, h3, h4 = st.columns([3, 2, 3, 2])
                 h1.markdown("**현장명**")
                 h2.markdown("**작성자**")
@@ -620,13 +633,13 @@ def main_app():
                 h4.markdown("**다운로드**")
                 st.write("---")
                 
-                for index, row in display_df.iterrows():
+                for index, row in view_df.iterrows():
                     c1, c2, c3, c4 = st.columns([3, 2, 3, 2])
                     c1.write(row['site_names'])
                     c2.write(row['writer'])
                     c3.write(row['created_at'])
                     
-                    file_name = row.get('file_path') # get으로 안전하게 가져옴
+                    file_name = row.get('file_path')
                     if pd.isna(file_name) or not file_name:
                         c4.error("파일 없음")
                     else:
@@ -643,7 +656,8 @@ def main_app():
     if user_role == 'admin':
         with tabs[7]:
             st.subheader("👑 관리자 페이지")
-            st.write("#### 👥 전체 회원 관리")
+            # [수정 3] 타이틀 변경: 전체 회원 관리 -> 전체 직원 관리
+            st.write("#### 👥 전체 직원 관리")
             users = get_all_users()
             approved_users = users[users['approved'] == True]
             if approved_users.empty: st.info("회원 없음")
