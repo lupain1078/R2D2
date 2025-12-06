@@ -139,24 +139,39 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-def create_dispatch_ticket_grouped(site_names_str, items_df, worker):
+# [수정] 엑셀 시트 분리 생성 함수 (각 현장별로 시트가 생성됨)
+def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     output = BytesIO()
-    display_df = items_df[['대여자', '이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
-    display_df.columns = ['현장명', '장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
-        ws = writer.sheets['출고증']
-        title_font = Font(bold=True, size=16)
-        ws['A1'] = "장비 출고증 (통합)"
-        ws['A1'].font = title_font
-        ws['A2'] = f"현장명: {site_names_str}"
-        ws['A3'] = f"출고 담당자: {worker}"
-        ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        
-        ws.column_dimensions['A'].width = 15; ws.column_dimensions['B'].width = 25; ws.column_dimensions['C'].width = 15
-        ws.column_dimensions['D'].width = 10; ws.column_dimensions['E'].width = 15; ws.column_dimensions['F'].width = 15
-        ws.column_dimensions['G'].width = 30
+        for site in site_list:
+            # 해당 현장 데이터 필터링
+            site_df = full_df[full_df['대여자'] == site]
+            if site_df.empty: continue
+            
+            display_df = site_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
+            display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
+            
+            # 시트 이름 설정 (특수문자 제거 등 안전장치 필요하나 일단 진행)
+            sheet_title = site[:30] # 엑셀 시트 이름 길이 제한
+            
+            display_df.to_excel(writer, index=False, sheet_name=sheet_title, startrow=4)
+            ws = writer.sheets[sheet_title]
+            
+            title_font = Font(bold=True, size=16)
+            ws['A1'] = f"장비 출고증 ({site})"
+            ws['A1'].font = title_font
+            ws['A2'] = f"현장명: {site}"
+            ws['A3'] = f"출고 담당자: {worker}"
+            ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            
+            ws.column_dimensions['A'].width = 25
+            ws.column_dimensions['B'].width = 15
+            ws.column_dimensions['C'].width = 10
+            ws.column_dimensions['D'].width = 15
+            ws.column_dimensions['E'].width = 15
+            ws.column_dimensions['F'].width = 30
+            
     return output.getvalue()
 
 def request_deletion(item_id, item_name, reason="사용자 요청"):
@@ -267,7 +282,6 @@ def main_app():
         if search_q: 
             view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-        # [수정] 색상 가시성 개선 (진한 배경 + 흰색 글씨)
         def highlight_rows(row):
             today = datetime.now().strftime("%Y-%m-%d"); status = str(row['대여여부'])
             try:
@@ -294,7 +308,7 @@ def main_app():
         disabled_cols = system_cols + editable_cols if not edit_mode else system_cols
 
         edited_df = st.data_editor(
-            view_df.style.apply(highlight_rows, axis=1), # 색상 적용
+            view_df.style.apply(highlight_rows, axis=1),
             column_config={
                 "ID": None,
                 "사진": st.column_config.TextColumn("사진 경로 (수정 불가)", disabled=True),
@@ -352,13 +366,12 @@ def main_app():
         st.write("---")
         st.write("#### 📋 현재 대여 중 목록")
         cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
-        # [수정] 대여 현황판 진한 주황색 + 흰글씨
         def highlight_rent(row): return ['background-color: #E65100; color: white'] * len(row)
         if not cur_rent.empty: 
             disp_rent = cur_rent[['이름', '대여자', '수량', '반납예정일']].reset_index(drop=True)
             st.dataframe(disp_rent.style.apply(highlight_rent, axis=1), use_container_width=True)
 
-    # 3. 현장 출고 (다중 선택 기능 추가)
+    # 3. 현장 출고 (다중 선택 탭 분리 + 멀티 시트 다운로드)
     with tabs[2]:
         st.subheader("🎬 현장 출고")
         disp_search = st.text_input("🔍 검색", key="disp_s")
@@ -387,32 +400,36 @@ def main_app():
                             log_transaction("현장출고", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df); st.success("출고 완료"); st.rerun()
 
         st.write("---")
-        st.write("#### 📋 현장별 현황 (다중 선택 및 통합 다운로드)")
+        st.write("#### 📋 현장별 현황 (다중 선택 및 개별 조회)")
         
         cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
         if not cur_disp.empty:
             all_sites = list(cur_disp['대여자'].unique())
-            # [수정] 다중 선택 가능하도록 multiselect 사용
-            s_sites = st.multiselect("현장을 선택하세요 (여러 개 선택 가능)", all_sites)
+            # 다중 선택 (여기서 여러 개 선택)
+            s_sites = st.multiselect("현장을 선택하세요 (각 현장별로 탭이 생성됩니다)", all_sites)
             
             if s_sites:
-                site_data = cur_disp[cur_disp['대여자'].isin(s_sites)]
-                display_table = site_data[['대여자', '이름', '수량', '반납예정일', '출고비고']].rename(columns={'대여자': '현장명'})
+                # 1. 화면 표시: 선택한 현장 수만큼 탭을 생성하여 따로 보여줌
+                site_tabs = st.tabs(s_sites)
                 
-                # [수정] 현장 출고 현황판 진한 파란색 + 흰글씨
-                def highlight_disp(row): return ['background-color: #1565C0; color: white'] * len(row)
-                st.dataframe(display_table.style.apply(highlight_disp, axis=1), use_container_width=True)
+                for i, site in enumerate(s_sites):
+                    with site_tabs[i]:
+                        site_data = cur_disp[cur_disp['대여자'] == site]
+                        display_table = site_data[['이름', '수량', '반납예정일', '출고비고']]
+                        
+                        # [수정] 현장 출고 현황판 진한 파란색 + 흰글씨
+                        def highlight_disp(row): return ['background-color: #1565C0; color: white'] * len(row)
+                        st.dataframe(display_table.style.apply(highlight_disp, axis=1), use_container_width=True)
                 
-                # 파일명 생성 (여러 개면 '통합' 표시)
-                if len(s_sites) > 1:
-                    fname = f"dispatch_ticket_combined_{len(s_sites)}sites.xlsx"
-                    site_names_str = ", ".join(s_sites)
-                else:
-                    fname = f"dispatch_ticket_{s_sites[0]}.xlsx"
-                    site_names_str = s_sites[0]
-
-                ticket_data = create_dispatch_ticket_grouped(site_names_str, site_data, st.session_state.username)
-                st.download_button(label="📄 선택한 현장 통합 출고증 다운로드", data=ticket_data, file_name=fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.write("")
+                # 2. 다운로드: 선택한 현장들을 하나의 엑셀 파일(각각 다른 시트)로 저장
+                ticket_data = create_dispatch_ticket_multisheet(s_sites, cur_disp, st.session_state.username)
+                st.download_button(
+                    label=f"📄 선택한 {len(s_sites)}개 현장 출고증 다운로드 (Excel)", 
+                    data=ticket_data, 
+                    file_name=f"dispatch_tickets_combined.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
         else: st.info("출고된 장비가 없습니다.")
 
     # 4. 반납
