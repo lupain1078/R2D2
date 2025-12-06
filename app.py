@@ -29,15 +29,13 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수 (자동 복구 기능 추가)
+# 2. 회원 및 데이터 처리 함수
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
-    """유저 DB 초기화 및 구버전 데이터 호환성 검사"""
-    # 1. 파일이 아예 없으면 새로 생성
     if not os.path.exists(USER_FILE_NAME):
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
@@ -53,16 +51,14 @@ def init_user_db():
         }
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
-    
-    # 2. 파일이 있으면 'birthdate' 컬럼이 있는지 확인하고 없으면 추가 (에러 방지)
     else:
+        # 구버전 호환성 체크
         try:
             df = pd.read_csv(USER_FILE_NAME)
             if 'birthdate' not in df.columns:
-                df['birthdate'] = '0000-00-00' # 빈 생일값 채워넣기
+                df['birthdate'] = '0000-00-00'
                 df.to_csv(USER_FILE_NAME, index=False)
-        except Exception:
-            pass # 파일 읽기 에러 시 무시
+        except: pass
 
 def register_user(username, password, birthdate):
     init_user_db()
@@ -198,11 +194,16 @@ def main_app():
                         st.success("변경 완료! 다시 로그인해주세요.")
 
         st.divider()
+        # [수정] 엑셀(.xlsx) 및 CSV(.csv) 모두 지원
         with st.expander("📥 데이터 관리"):
-            uploaded_file = st.file_uploader("엑셀 파일 불러오기", type=['xlsx'])
+            uploaded_file = st.file_uploader("파일 불러오기 (Excel/CSV)", type=['xlsx', 'csv'])
             if uploaded_file and st.button("데이터 덮어쓰기 적용"):
                 try:
-                    new_df = pd.read_excel(uploaded_file)
+                    if uploaded_file.name.endswith('.csv'):
+                        new_df = pd.read_csv(uploaded_file)
+                    else:
+                        new_df = pd.read_excel(uploaded_file)
+                        
                     for col in FIELD_NAMES:
                         if col not in new_df.columns: new_df[col] = ""
                     st.session_state.df = new_df
@@ -435,7 +436,6 @@ def main_app():
         with tabs[6]:
             st.subheader("👑 관리자 페이지")
             
-            # [복구] 전체 회원 관리 섹션
             st.write("#### 👥 전체 회원 관리 (탈퇴)")
             users = get_all_users()
             approved_users = users[users['approved'] == True]
@@ -444,7 +444,6 @@ def main_app():
                 st.info("승인된 회원이 없습니다.")
             else:
                 for idx, row in approved_users.iterrows():
-                    # 관리자 본인은 제외
                     if row['role'] == 'admin': continue
                     
                     c1, c2, c3 = st.columns([3, 2, 1])
