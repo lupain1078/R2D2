@@ -29,14 +29,16 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수
+# 2. 회원 및 데이터 처리 함수 (안전장치 강화)
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
+    """유저 DB 초기화 및 구버전 데이터 호환성 자동 패치"""
     if not os.path.exists(USER_FILE_NAME):
+        # 파일이 없으면 새로 생성
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
         except: admin_pw = "1234"
@@ -52,13 +54,14 @@ def init_user_db():
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
     else:
-        # 구버전 호환성 체크
+        # [수정] 파일이 있으면 'birthdate' 컬럼이 있는지 확인하고 없으면 강제로 추가
         try:
             df = pd.read_csv(USER_FILE_NAME)
             if 'birthdate' not in df.columns:
-                df['birthdate'] = '0000-00-00'
+                df['birthdate'] = '0000-00-00' # 빈 생일값 채워넣기
                 df.to_csv(USER_FILE_NAME, index=False)
-        except: pass
+        except Exception:
+            pass 
 
 def register_user(username, password, birthdate):
     init_user_db()
@@ -121,11 +124,12 @@ def load_data():
         return df
     try:
         df = pd.read_csv(FILE_NAME)
+        # 컬럼 누락 방지
         for col in FIELD_NAMES:
             if col not in df.columns: df[col] = ""
         if 'ID' not in df.columns or df['ID'].isnull().any():
             df['ID'] = [str(uuid.uuid4()) for _ in range(len(df))]
-        return df.fillna("")
+        return df.fillna("") # [중요] 빈 칸을 빈 문자열로 채움
     except: return pd.DataFrame(columns=FIELD_NAMES)
 
 def save_data(df): df.to_csv(FILE_NAME, index=False)
@@ -194,7 +198,6 @@ def main_app():
                         st.success("변경 완료! 다시 로그인해주세요.")
 
         st.divider()
-        # [수정] 엑셀(.xlsx) 및 CSV(.csv) 모두 지원
         with st.expander("📥 데이터 관리"):
             uploaded_file = st.file_uploader("파일 불러오기 (Excel/CSV)", type=['xlsx', 'csv'])
             if uploaded_file and st.button("데이터 덮어쓰기 적용"):
@@ -203,12 +206,15 @@ def main_app():
                         new_df = pd.read_csv(uploaded_file)
                     else:
                         new_df = pd.read_excel(uploaded_file)
-                        
+                    
+                    # [수정] 업로드된 데이터의 빈 칸을 안전하게 처리 (에러 방지 핵심)
+                    new_df = new_df.fillna("") 
+                    
                     for col in FIELD_NAMES:
                         if col not in new_df.columns: new_df[col] = ""
                     st.session_state.df = new_df
                     save_data(new_df)
-                    st.success("데이터 로드 완료!"); st.rerun()
+                    st.success("데이터 로드 완료! (빈 칸 자동 처리됨)"); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
             
             if not st.session_state.df.empty:
@@ -262,9 +268,15 @@ def main_app():
         view_df = st.session_state.df.copy()
         if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
+        # [수정] 색상 표시 로직 안전하게 변경 (에러 방지 핵심)
         def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d"); status = row['대여여부']; r_date = row['반납예정일']
-            if r_date and r_date < today and status in ['대여 중', '현장 출고']: return ['background-color: #ffcccc'] * len(row)
+            today = datetime.now().strftime("%Y-%m-%d")
+            status = row['대여여부']
+            # 날짜가 NaN(실수)이거나 비어있을 경우를 대비해 문자열로 변환 후 비교
+            r_date = str(row['반납예정일']).strip()
+            
+            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: 
+                return ['background-color: #ffcccc'] * len(row)
             elif status == '대여 중': return ['background-color: #ffb74d'] * len(row)
             elif status == '현장 출고': return ['background-color: #e3f2fd'] * len(row)
             elif status == '파손': return ['background-color: #cfd8dc; color: red'] * len(row)
