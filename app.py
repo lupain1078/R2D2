@@ -29,13 +29,15 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수
+# 2. 회원 및 데이터 처리 함수 (자동 복구 기능 추가)
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
+    """유저 DB 초기화 및 구버전 데이터 호환성 검사"""
+    # 1. 파일이 아예 없으면 새로 생성
     if not os.path.exists(USER_FILE_NAME):
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
@@ -51,6 +53,16 @@ def init_user_db():
         }
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
+    
+    # 2. 파일이 있으면 'birthdate' 컬럼이 있는지 확인하고 없으면 추가 (에러 방지)
+    else:
+        try:
+            df = pd.read_csv(USER_FILE_NAME)
+            if 'birthdate' not in df.columns:
+                df['birthdate'] = '0000-00-00' # 빈 생일값 채워넣기
+                df.to_csv(USER_FILE_NAME, index=False)
+        except Exception:
+            pass # 파일 읽기 에러 시 무시
 
 def register_user(username, password, birthdate):
     init_user_db()
