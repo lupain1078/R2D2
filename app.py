@@ -230,7 +230,7 @@ def main_app():
     if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
 
-    # ------------------ 1. 재고 관리 (엑셀 스타일 수정 기능 추가) ------------------
+    # 1. 재고 관리 (잠금 기능 추가)
     with tabs[0]:
         st.subheader("장비 관리")
         
@@ -254,43 +254,47 @@ def main_app():
 
         st.write("---")
         
-        # [수정] 엑셀 스타일 편집기 기능 도입
-        st.write("#### 📝 장비 목록 (더블클릭하여 수정 가능)")
-        st.info("💡 팁: '이름', '수량', '브랜드' 등은 바로 수정할 수 있습니다. (대여 상태 등은 자동으로 잠금 처리됩니다)")
+        # [수정] 수정 모드 토글 (안전장치)
+        c_search, c_toggle = st.columns([4, 1])
+        with c_search:
+            search_q = st.text_input("🔍 재고 검색", placeholder="이름, 브랜드...")
+        with c_toggle:
+            st.write("") # 간격 맞춤
+            edit_mode = st.toggle("🔓 수정 모드 (켜면 수정 가능)")
 
-        search_q = st.text_input("🔍 재고 검색", placeholder="이름, 브랜드...")
-        
-        # 원본 데이터를 복사해서 보여줄 데이터 생성
         view_df = st.session_state.df.copy()
         if search_q: 
             view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
 
-        # 데이터 에디터 설정 (수정 가능하게)
+        # 수정 모드에 따라 잠금 컬럼 설정
+        system_cols = ["ID", "대여여부", "대여자", "대여일", "반납예정일", "출고비고", "사진"] # 절대 수정 불가
+        editable_cols = ["타입", "이름", "수량", "브랜드", "특이사항", "대여업체"] # 수정 가능 항목
+        
+        # 토글이 꺼져있으면 모든 컬럼 잠금, 켜져있으면 시스템 컬럼만 잠금
+        disabled_cols = system_cols + editable_cols if not edit_mode else system_cols
+
         edited_df = st.data_editor(
             view_df,
             column_config={
-                "ID": None, # ID는 숨김
+                "ID": None,
                 "사진": st.column_config.TextColumn("사진 경로 (수정 불가)", disabled=True),
             },
-            disabled=["ID", "대여여부", "대여자", "대여일", "반납예정일", "출고비고", "사진"], # 시스템 관리 컬럼은 수정 금지
+            disabled=disabled_cols, # 동적 잠금 적용
             hide_index=True,
             use_container_width=True,
-            num_rows="fixed" # 행 추가/삭제는 상단 등록/하단 삭제 버튼 이용
+            num_rows="fixed"
         )
 
-        # 수정사항 저장 버튼
-        if st.button("💾 수정 사항 저장"):
-            # 편집된 데이터프레임을 순회하며 원본 데이터 업데이트
-            for index, row in edited_df.iterrows():
-                # ID가 일치하는 행을 찾아 업데이트 (안전한 방식)
-                st.session_state.df.loc[st.session_state.df['ID'] == row['ID'], ['타입', '이름', '수량', '브랜드', '특이사항', '대여업체']] = [row['타입'], row['이름'], row['수량'], row['브랜드'], row['특이사항'], row['대여업체']]
-            
-            save_data(st.session_state.df)
-            st.success("모든 수정 사항이 저장되었습니다!")
-            st.rerun()
+        # 수정 모드일 때만 저장 버튼 보이기
+        if edit_mode:
+            if st.button("💾 수정 사항 저장 (누르면 반영됩니다)"):
+                for index, row in edited_df.iterrows():
+                    st.session_state.df.loc[st.session_state.df['ID'] == row['ID'], ['타입', '이름', '수량', '브랜드', '특이사항', '대여업체']] = [row['타입'], row['이름'], row['수량'], row['브랜드'], row['특이사항'], row['대여업체']]
+                save_data(st.session_state.df)
+                st.success("저장 완료!")
+                st.rerun()
 
         st.write("---")
-        # 삭제 기능 (기존 유지)
         if not view_df.empty:
             del_opts = view_df.apply(lambda x: f"{x['이름']} ({x['브랜드']})", axis=1)
             to_delete_idx = st.selectbox("🗑️ 삭제 요청/처리 선택", options=del_opts.index, format_func=lambda x: del_opts[x])
@@ -331,10 +335,7 @@ def main_app():
         st.write("---")
         st.write("#### 📋 현재 대여 중 목록")
         cur_rent = st.session_state.df[st.session_state.df['대여여부'] == '대여 중']
-        # [수정] 대여 현황판도 보기 좋게 색상 적용 (수정은 불가)
-        def highlight_rent(row):
-            return ['background-color: #e65100; color: white'] * len(row)
-        
+        def highlight_rent(row): return ['background-color: #e65100; color: white'] * len(row)
         if not cur_rent.empty: 
             disp_rent = cur_rent[['이름', '대여자', '수량', '반납예정일']].reset_index(drop=True)
             st.dataframe(disp_rent.style.apply(highlight_rent, axis=1), use_container_width=True)
@@ -376,11 +377,8 @@ def main_app():
             if s_site != "선택하세요":
                 site_data = cur_disp[cur_disp['대여자'] == s_site]
                 display_table = site_data[['대여자', '이름', '수량', '반납예정일', '출고비고']].rename(columns={'대여자': '현장명'})
-                
-                # [수정] 현장 출고 현황판 색상 적용 (파란색)
                 def highlight_disp(row): return ['background-color: #e3f2fd'] * len(row)
                 st.dataframe(display_table.style.apply(highlight_disp, axis=1), use_container_width=True)
-                
                 ticket_data = create_dispatch_ticket_grouped(s_site, site_data, st.session_state.username)
                 st.download_button(label=f"📄 [{s_site}] 전체 출고증 다운로드", data=ticket_data, file_name=f"dispatch_ticket_{s_site}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else: st.info("출고된 장비가 없습니다.")
