@@ -29,16 +29,14 @@ BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 회원 및 데이터 처리 함수 (안전장치 강화)
+# 2. 회원 및 데이터 처리 함수
 # ====================================================================
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 def init_user_db():
-    """유저 DB 초기화 및 구버전 데이터 호환성 자동 패치"""
     if not os.path.exists(USER_FILE_NAME):
-        # 파일이 없으면 새로 생성
         df = pd.DataFrame(columns=['username', 'password', 'role', 'approved', 'created_at', 'birthdate'])
         try: admin_pw = st.secrets["admin_password"]
         except: admin_pw = "1234"
@@ -54,14 +52,12 @@ def init_user_db():
         df = pd.concat([df, pd.DataFrame([admin_user])], ignore_index=True)
         df.to_csv(USER_FILE_NAME, index=False)
     else:
-        # [수정] 파일이 있으면 'birthdate' 컬럼이 있는지 확인하고 없으면 강제로 추가
         try:
             df = pd.read_csv(USER_FILE_NAME)
             if 'birthdate' not in df.columns:
-                df['birthdate'] = '0000-00-00' # 빈 생일값 채워넣기
+                df['birthdate'] = '0000-00-00'
                 df.to_csv(USER_FILE_NAME, index=False)
-        except Exception:
-            pass 
+        except: pass
 
 def register_user(username, password, birthdate):
     init_user_db()
@@ -124,12 +120,11 @@ def load_data():
         return df
     try:
         df = pd.read_csv(FILE_NAME)
-        # 컬럼 누락 방지
         for col in FIELD_NAMES:
             if col not in df.columns: df[col] = ""
         if 'ID' not in df.columns or df['ID'].isnull().any():
             df['ID'] = [str(uuid.uuid4()) for _ in range(len(df))]
-        return df.fillna("") # [중요] 빈 칸을 빈 문자열로 채움
+        return df.fillna("")
     except: return pd.DataFrame(columns=FIELD_NAMES)
 
 def save_data(df): df.to_csv(FILE_NAME, index=False)
@@ -143,13 +138,38 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
     if not os.path.exists(LOG_FILE_NAME): log_df.to_csv(LOG_FILE_NAME, index=False)
     else: log_df.to_csv(LOG_FILE_NAME, mode='a', header=False, index=False)
 
-def create_dispatch_ticket(item_name, brand, qty, target, date_out, date_ret, note, worker):
-    df = pd.DataFrame([{
-        "구분": "장비 출고증", "출고일자": date_out, "현장/업체명": target, "장비명": item_name, "브랜드": brand,
-        "수량": qty, "반납예정일": date_ret, "비고": note, "담당자(출고)": worker, "발행일시": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }])
+# [수정] 출고증 생성 함수 업그레이드 (현장별 묶음 출력 + 상단 담당자 1회 표기)
+def create_dispatch_ticket_grouped(site_name, items_df, worker):
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='출고증')
+    
+    # 데이터프레임 정리 (필요한 컬럼만)
+    display_df = items_df[['이름', '브랜드', '수량', '대여일', '반납예정일', '출고비고']].copy()
+    display_df.columns = ['장비명', '브랜드', '수량', '출고일', '반납예정일', '비고']
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # 데이터를 5번째 줄부터 작성 (상단에 정보를 넣기 위해)
+        display_df.to_excel(writer, index=False, sheet_name='출고증', startrow=4)
+        
+        # 워크시트 가져오기
+        ws = writer.sheets['출고증']
+        
+        # 상단 정보 작성 (Row 1~4)
+        ws['A1'] = "장비 출고증"
+        ws['A1'].font = pd.io.formats.excel.ExcelCell.style_converter({'font': {'bold': True, 'size': 16}})['font']
+        
+        # 현장명, 담당자, 출력일자 (한번만 표시)
+        ws['A2'] = f"현장명: {site_name}"
+        ws['A3'] = f"출고 담당자: {worker}"
+        ws['D3'] = f"출력일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        
+        # 열 너비 조정 (대략적으로)
+        ws.column_dimensions['A'].width = 25 # 장비명
+        ws.column_dimensions['B'].width = 15 # 브랜드
+        ws.column_dimensions['C'].width = 10 # 수량
+        ws.column_dimensions['D'].width = 15 # 출고일
+        ws.column_dimensions['E'].width = 15 # 반납예정일
+        ws.column_dimensions['F'].width = 30 # 비고
+
     return output.getvalue()
 
 def request_deletion(item_id, item_name, reason="사용자 요청"):
@@ -207,14 +227,12 @@ def main_app():
                     else:
                         new_df = pd.read_excel(uploaded_file)
                     
-                    # [수정] 업로드된 데이터의 빈 칸을 안전하게 처리 (에러 방지 핵심)
                     new_df = new_df.fillna("") 
-                    
                     for col in FIELD_NAMES:
                         if col not in new_df.columns: new_df[col] = ""
                     st.session_state.df = new_df
                     save_data(new_df)
-                    st.success("데이터 로드 완료! (빈 칸 자동 처리됨)"); st.rerun()
+                    st.success("데이터 로드 완료!"); st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
             
             if not st.session_state.df.empty:
@@ -268,15 +286,10 @@ def main_app():
         view_df = st.session_state.df.copy()
         if search_q: view_df = view_df[view_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)]
         
-        # [수정] 색상 표시 로직 안전하게 변경 (에러 방지 핵심)
         def highlight_rows(row):
-            today = datetime.now().strftime("%Y-%m-%d")
-            status = row['대여여부']
-            # 날짜가 NaN(실수)이거나 비어있을 경우를 대비해 문자열로 변환 후 비교
+            today = datetime.now().strftime("%Y-%m-%d"); status = row['대여여부']
             r_date = str(row['반납예정일']).strip()
-            
-            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: 
-                return ['background-color: #ffcccc'] * len(row)
+            if r_date and r_date != 'nan' and r_date < today and status in ['대여 중', '현장 출고']: return ['background-color: #ffcccc'] * len(row)
             elif status == '대여 중': return ['background-color: #ffb74d'] * len(row)
             elif status == '현장 출고': return ['background-color: #e3f2fd'] * len(row)
             elif status == '파손': return ['background-color: #cfd8dc; color: red'] * len(row)
@@ -344,6 +357,7 @@ def main_app():
             if sel is not None:
                 item = st.session_state.df.loc[sel]
                 with st.form("disp"):
+                    # [수정] 현장명 입력 안내 명확화
                     tgt = st.text_input("현장명"); c1, c2, c3 = st.columns(3)
                     q = c1.number_input("수량", 1, int(item['수량']), 1); d1 = c2.date_input("출고일"); d2 = c3.date_input("반납예정일(필수)", value=None); note = st.text_input("비고")
                     if st.form_submit_button("출고"):
@@ -358,16 +372,33 @@ def main_app():
                             else:
                                 st.session_state.df.at[sel, '대여여부'] = '현장 출고'; st.session_state.df.at[sel, '대여자'] = tgt; st.session_state.df.at[sel, '대여일'] = d1s; st.session_state.df.at[sel, '반납예정일'] = d2s; st.session_state.df.at[sel, '출고비고'] = note
                             log_transaction("현장출고", item['이름'], q, tgt, d1s, d2s); save_data(st.session_state.df)
-                            st.session_state.last_ticket = create_dispatch_ticket(item['이름'], item['브랜드'], q, tgt, d1s, d2s, note, st.session_state.username)
-                            st.success("완료"); st.rerun()
-                if 'last_ticket' in st.session_state: st.download_button("📄 출고증 다운로드", st.session_state.last_ticket, "dispatch.xlsx")
+                            st.success("출고 완료"); st.rerun()
+
         st.write("---")
-        st.write("#### 📋 현장별 현황"); cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
+        st.write("#### 📋 현장별 현황 (출고증 통합 다운로드)")
+        
+        # [수정] 현장별 필터 및 통합 다운로드 기능
+        cur_disp = st.session_state.df[st.session_state.df['대여여부'] == '현장 출고']
         if not cur_disp.empty:
-            sites = ["전체보기"] + list(cur_disp['대여자'].unique())
-            s_site = st.selectbox("현장 필터", sites)
-            if s_site != "전체보기": cur_disp = cur_disp[cur_disp['대여자'] == s_site]
-            st.dataframe(cur_disp[['대여자', '이름', '수량', '반납예정일', '출고비고']], use_container_width=True)
+            sites = ["선택하세요"] + list(cur_disp['대여자'].unique())
+            s_site = st.selectbox("현장 선택 (출고증을 뽑으려면 선택하세요)", sites)
+            
+            if s_site != "선택하세요":
+                site_data = cur_disp[cur_disp['대여자'] == s_site]
+                # 컬럼명도 UI에 맞게 '현장명'으로 표시
+                display_table = site_data[['대여자', '이름', '수량', '반납예정일', '출고비고']].rename(columns={'대여자': '현장명'})
+                st.dataframe(display_table, use_container_width=True)
+                
+                # [수정] 통합 출고증 다운로드 버튼
+                ticket_data = create_dispatch_ticket_grouped(s_site, site_data, st.session_state.username)
+                st.download_button(
+                    label=f"📄 [{s_site}] 전체 출고증 다운로드",
+                    data=ticket_data,
+                    file_name=f"dispatch_ticket_{s_site}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.info("출고된 장비가 없습니다.")
 
     # 4. 반납
     with tabs[3]:
@@ -377,6 +408,7 @@ def main_app():
         if ret_s: ret_df = ret_df[ret_df.apply(lambda row: row.astype(str).str.contains(ret_s, case=False).any(), axis=1)]
         if ret_df.empty: st.info("대상 없음")
         else:
+            # 여기도 '현장명'으로 표시되도록 수정
             opts = ret_df.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']}", axis=1)
             sel = st.selectbox("선택", options=opts.index, format_func=lambda x: opts[x], key="ret_sel")
             if sel is not None:
