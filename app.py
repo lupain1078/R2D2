@@ -24,14 +24,14 @@ TICKETS_DIR = os.path.join(DATA_DIR, 'tickets')
 if not os.path.exists(IMG_DIR): os.makedirs(IMG_DIR)
 if not os.path.exists(TICKETS_DIR): os.makedirs(TICKETS_DIR)
 
-# 파일 경로 (로컬 백업 및 임시 저장용)
+# 파일 경로
 FILE_NAME = os.path.join(DATA_DIR, 'equipment_data.csv')
 LOG_FILE_NAME = os.path.join(DATA_DIR, 'transaction_log.csv')
 USER_FILE_NAME = os.path.join(DATA_DIR, 'users.csv')
 DEL_REQ_FILE_NAME = os.path.join(DATA_DIR, 'deletion_requests.csv')
 TICKET_HISTORY_FILE = os.path.join(DATA_DIR, 'ticket_history.csv')
+BACKUP_DIR = os.path.join(DATA_DIR, 'backup')
 
-# 컬럼 정의
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 COLS_LOG = ['작성자', '시간', '종류', '장비이름', '수량', '대상', '날짜', '반납예정일']
 COLS_USER = ['username', 'password', 'role', 'approved', 'created_at', 'birthdate']
@@ -40,10 +40,9 @@ COLS_TICKET = ['ticket_id', 'site_names', 'writer', 'created_at', 'file_path']
 SPREADSHEET_NAME = "장비관리시스템"
 
 # ====================================================================
-# 2. 구글 시트 및 데이터 처리 함수
+# 2. 구글 시트 연결 및 데이터 처리
 # ====================================================================
 
-# [핵심] 구글 시트 연결
 def get_google_sheet_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
@@ -52,6 +51,7 @@ def get_google_sheet_client():
         
         secrets_val = st.secrets["google_credentials"]
         
+        # JSON 파싱 및 제어 문자 오류 방지
         if isinstance(secrets_val, str):
             try:
                 creds_json = json.loads(secrets_val, strict=False)
@@ -67,7 +67,7 @@ def get_google_sheet_client():
     except Exception as e:
         return None
 
-# [핵심] 데이터 로드 캐싱 (API 한도 초과 방지: 60초 유지)
+# 데이터 로드 (캐시 적용)
 @st.cache_data(ttl=60)
 def load_data_from_sheet(worksheet_name, columns):
     client = get_google_sheet_client()
@@ -96,7 +96,7 @@ def load_data_from_sheet(worksheet_name, columns):
     except Exception:
         return pd.DataFrame(columns=columns)
 
-# 데이터 저장 (캐시 초기화 포함)
+# 데이터 저장
 def save_data_to_sheet(worksheet_name, df):
     client = get_google_sheet_client()
     if not client: return
@@ -105,12 +105,41 @@ def save_data_to_sheet(worksheet_name, df):
         ws = sh.worksheet(worksheet_name)
         ws.clear()
         ws.update([df.columns.values.tolist()] + df.values.tolist())
-        load_data_from_sheet.clear() # 저장 후 캐시 비우기
+        load_data_from_sheet.clear()
     except Exception:
         pass
 
 def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
+
+def init_user_db():
+    # 1. 유저 DB 복구
+    if not os.path.exists(USER_FILE_NAME):
+        df = pd.DataFrame(columns=COLS_USER)
+        try: admin_pw = st.secrets.get("admin_password", "1234")
+        except: admin_pw = "1234"
+        
+        df.loc[0] = ['admin', hash_password(admin_pw), 'admin', True, datetime.now().strftime("%Y-%m-%d"), '0000-00-00']
+        df.to_csv(USER_FILE_NAME, index=False)
+    else:
+        try:
+            df = pd.read_csv(USER_FILE_NAME)
+            if 'birthdate' not in df.columns:
+                df['birthdate'] = '0000-00-00'
+                df.to_csv(USER_FILE_NAME, index=False)
+        except: pass
+
+    # 2. 출고증 DB 복구
+    if not os.path.exists(TICKET_HISTORY_FILE):
+        df = pd.DataFrame(columns=COLS_TICKET)
+        df.to_csv(TICKET_HISTORY_FILE, index=False)
+    else:
+        try:
+            df = pd.read_csv(TICKET_HISTORY_FILE)
+            if 'file_path' not in df.columns:
+                df['file_path'] = ""
+                df.to_csv(TICKET_HISTORY_FILE, index=False)
+        except: pass
 
 def verify_password(username, input_pw, df_users):
     user = df_users[df_users['username'] == username]
@@ -133,7 +162,6 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
             load_data_from_sheet.clear()
         except: pass
 
-# [수정] 엑셀 생성 함수 (AttributeError 해결됨)
 def create_dispatch_ticket_multisheet(site_list, full_df, worker):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -148,7 +176,6 @@ def create_dispatch_ticket_multisheet(site_list, full_df, worker):
             display_df.to_excel(writer, index=False, sheet_name=sheet_title, startrow=4)
             ws = writer.sheets[sheet_title]
             
-            # 폰트 설정 (openpyxl 최신 방식)
             title_font = Font(bold=True, size=16)
             ws['A1'] = f"장비 출고증 ({site})"
             ws['A1'].font = title_font
@@ -174,7 +201,9 @@ def save_ticket_history(site_names_str, file_data):
     if client:
         try:
             sh = client.open(SPREADSHEET_NAME)
-            ws = sh.worksheet("출고증")
+            try: ws = sh.worksheet("출고증")
+            except: ws = sh.add_worksheet("출고증", 1000, 10); ws.append_row(COLS_TICKET)
+            
             new_record = [
                 str(uuid.uuid4()), site_names_str, st.session_state.username,
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -183,6 +212,19 @@ def save_ticket_history(site_names_str, file_data):
             ws.append_row(new_record)
             load_data_from_sheet.clear()
         except: pass
+    
+    # 로컬에도 저장 (화면 표시용)
+    if not os.path.exists(TICKET_HISTORY_FILE):
+        df = pd.DataFrame(columns=COLS_TICKET)
+    else: df = pd.read_csv(TICKET_HISTORY_FILE)
+    
+    new_row_local = {
+        'ticket_id': str(uuid.uuid4()), 'site_names': site_names_str, 
+        'writer': st.session_state.username, 'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+        'file_path': file_name
+    }
+    pd.concat([df, pd.DataFrame([new_row_local])], ignore_index=True).to_csv(TICKET_HISTORY_FILE, index=False)
+
 
 def request_deletion(item_id, item_name):
     st.info("관리자에게 삭제를 요청했습니다. (로그에 기록됨)")
@@ -199,23 +241,18 @@ def main_app():
     df = st.session_state.df_equip
     user_role = st.session_state.role
 
-    # 사이드바
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
-        # [수정 4] 권한 표시: 일반 사용자 -> 직원
         st.caption(f"권한: {'👑 관리자' if user_role == 'admin' else '직원'}")
         st.divider()
-        
         if st.button("🔄 데이터 새로고침"):
             load_data_from_sheet.clear()
             st.session_state.df_equip = load_data_from_sheet("재고", COLS_EQUIP)
-            st.success("동기화 완료")
+            st.success("완료")
         
-        # [수정 2] 백업 버튼 이름 변경
         csv = df.drop(columns=['ID'], errors='ignore').to_csv(index=False).encode('utf-8-sig')
         st.download_button("💾 장비 목록 백업", csv, "equipment_backup.csv", "text/csv")
 
-    # 메인
     col_h1, col_h2 = st.columns([8, 2])
     col_h1.title("🛠️ 통합 장비 관리 시스템 (Google)")
     if col_h2.button("로그아웃"):
@@ -231,7 +268,7 @@ def main_app():
     c4.metric("💔 파손", int(df[df['대여여부'] == '파손']['수량'].sum()))
     st.divider()
 
-    tab_titles = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리", "🗂️ 출고증 기록"]
+    tab_titles = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리", "🗂️ 출고증 보관함"]
     if user_role == 'admin': tab_titles.append("👑 관리자 페이지")
     tabs = st.tabs(tab_titles)
 
@@ -279,7 +316,6 @@ def main_app():
         if not view_df.empty:
             del_opts = {r['ID']: f"{r['이름']} ({r.get('브랜드','')})" for i, r in view_df.iterrows()}
             del_id = st.selectbox("삭제 대상", options=list(del_opts.keys()), format_func=lambda x: del_opts[x])
-            # [수정 1] 버튼 이름 변경: 삭제 실행 -> 삭제 요청
             if st.button("삭제 요청"):
                 if user_role == 'admin':
                     st.session_state.df_equip = st.session_state.df_equip[st.session_state.df_equip['ID'] != del_id]
@@ -297,6 +333,7 @@ def main_app():
             sel_sites = st.multiselect("현장 선택", sites)
             if sel_sites:
                 excel_data = create_dispatch_ticket_multisheet(sel_sites, cur, st.session_state.username)
+                
                 today_str = datetime.now().strftime("%Y.%m.%d")
                 site_str = sel_sites[0] if len(sel_sites) == 1 else f"{sel_sites[0]}외{len(sel_sites)-1}곳"
                 fname = f"({site_str}-{today_str}).xlsx"
@@ -315,9 +352,11 @@ def main_app():
     # 7. 출고증 보관함
     with tabs[6]:
         st.subheader("🗂️ 보관함")
-        df_hist = load_data_from_sheet("출고증", COLS_TICKET)
-        if not df_hist.empty:
-            hist = df_hist.iloc[::-1]
+        
+        # 로컬 기록 우선 확인
+        if os.path.exists(TICKET_HISTORY_FILE):
+            hist = pd.read_csv(TICKET_HISTORY_FILE).iloc[::-1]
+            
             for idx, row in hist.iterrows():
                 c1, c2, c3, c4 = st.columns([3, 2, 3, 2])
                 c1.write(row.get('site_names', ''))
@@ -336,10 +375,9 @@ def main_app():
                 st.write("---")
         else: st.info("없음")
 
-    # 8. 관리자 (직원 관리)
+    # 8. 관리자
     if user_role == 'admin':
         with tabs[7]:
-            # [수정 3] 타이틀 변경: 전체 회원 관리 -> 전체 직원 관리
             st.subheader("👑 전체 직원 관리")
             df_users = load_data_from_sheet("직원", COLS_USER)
             edited = st.data_editor(df_users, hide_index=True)
@@ -347,27 +385,29 @@ def main_app():
                 save_data_to_sheet("직원", edited)
                 st.success("완료"); st.rerun()
 
-# ... (나머지 탭 로직은 생략되었으나 위와 동일한 방식으로 작동) ...
+# ... (로그인 페이지 등) ...
 
 if __name__ == '__main__':
+    init_user_db()
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
     if st.session_state.logged_in: main_app()
     else: 
         st.title("로그인")
         df_users = load_data_from_sheet("직원", COLS_USER)
-        # admin 초기 생성 로직
+        # admin 자동 생성
         if df_users.empty:
-            admin_user = pd.DataFrame([{'username': 'admin', 'password': hash_password(st.secrets.get("admin_password", "1234")), 'role': 'admin', 'approved': 'TRUE', 'created_at': str(datetime.now()), 'birthdate': ''}])
-            save_data_to_sheet("직원", admin_user)
-            df_users = admin_user
-
-        uid = st.text_input("ID")
-        upw = st.text_input("PW", type="password")
-        if st.button("로그인"):
-            if verify_password(uid, upw, df_users):
-                user = df_users[df_users['username'] == uid].iloc[0]
-                st.session_state.logged_in = True
-                st.session_state.username = uid
-                st.session_state.role = user['role']
-                st.rerun()
-            else: st.error("실패")
+            try: apw = st.secrets.get("admin_password", "1234")
+            except: apw = "1234"
+            au = pd.DataFrame([{'username': 'admin', 'password': hash_password(apw), 'role': 'admin', 'approved': 'TRUE', 'created_at': str(datetime.now()), 'birthdate': ''}])
+            save_data_to_sheet("직원", au); df_users = au
+            
+        t1, t2 = st.tabs(["로그인", "회원가입"])
+        with t1:
+            uid = st.text_input("ID"); upw = st.text_input("PW", type="password")
+            if st.button("로그인"):
+                if verify_password(uid, upw, df_users):
+                    u = df_users[df_users['username'] == uid].iloc[0]
+                    if str(u['approved']).upper() == 'TRUE':
+                        st.session_state.logged_in = True; st.session_state.username = uid; st.session_state.role = u['role']; st.rerun()
+                    else: st.error("승인 대기")
+                else: st.error("실패")
