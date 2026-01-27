@@ -10,7 +10,7 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="통합 장비 관리 시스템", layout="wide", page_icon="🛠️")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 필드 정의 (삭제요청 포함)
+# 필드 정의 (관리자 페이지 기능을 위해 '삭제요청' 필드 포함)
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진', '삭제요청']
 
 # 2. 데이터 처리 함수
@@ -19,12 +19,12 @@ def load_data(sheet_name="Sheet1"):
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.fillna("")
         
-        # [해결] Sheet1에서 '삭제요청' 열이 없으면 자동으로 만들어줌
+        # [해결] Sheet1에서 '삭제요청' 열이 없어서 발생하는 KeyError 방지
         if sheet_name == "Sheet1":
             if not df.empty:
                 if '삭제요청' not in df.columns:
                     df['삭제요청'] = ""
-                # 수량 정수화
+                # 수량 정수화 (.0 제거)
                 df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
             else:
                 df = pd.DataFrame(columns=FIELD_NAMES)
@@ -33,7 +33,6 @@ def load_data(sheet_name="Sheet1"):
         return pd.DataFrame(columns=FIELD_NAMES if sheet_name=="Sheet1" else [])
 
 def save_data(df, sheet_name="Sheet1"):
-    # 저장 전 정수화 확인
     if sheet_name == "Sheet1" and '수량' in df.columns:
         df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
     conn.update(worksheet=sheet_name, data=df)
@@ -71,21 +70,21 @@ def main_app():
 
     st.title("🛠️ 통합 장비 관리 시스템")
 
-    # 상단 요약 지표
+    # 상단 요약 지표 (정수 표시)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🚚 대여 중", int(df[df['대여여부'].str.strip() == '대여 중']['수량'].sum()) if not df.empty else 0)
     c2.metric("🎬 현장 출고", int(df[df['대여여부'].str.strip() == '현장 출고']['수량'].sum()) if not df.empty else 0)
     c3.metric("🛠️ 수리 중", int(df[df['대여여부'].str.strip() == '수리 중']['수량'].sum()) if not df.empty else 0)
     c4.metric("💔 파손", int(df[df['대여여부'].str.strip() == '파손']['수량'].sum()) if not df.empty else 0)
 
-    # [해결] IndexError 방지를 위해 동적으로 탭 생성
+    # [해결] IndexError 방지를 위해 사용 가능한 탭 리스트 생성
     tab_list = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"]
     if is_admin:
         tab_list.append("👑 관리자 페이지")
     
     tabs = st.tabs(tab_list)
 
-    # 1. 재고 관리 (삭제 요청 포함)
+    # --- 1. 재고 관리 (삭제 요청 포함) ---
     with tabs[0]:
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
@@ -98,6 +97,7 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); st.rerun()
         
         edit_m = st.toggle("🔓 수정 및 삭제 요청 모드")
+        # 데이터 에디터에서 정수 수량 유지
         edited = st.data_editor(st.session_state.df, disabled=(not edit_m), hide_index=True, use_container_width=True)
         if edit_m:
             if st.button("💾 모든 변경사항 저장"):
@@ -108,7 +108,7 @@ def main_app():
                 st.session_state.df.loc[st.session_state.df['이름'] == target_del, '삭제요청'] = 'Y'
                 save_data(st.session_state.df, "Sheet1"); st.warning(f"'{target_del}' 삭제 요청 완료"); st.rerun()
 
-    # 2. 외부 대여
+    # --- 2. 외부 대여 ---
     with tabs[1]:
         stock = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'] > 0)]
         if not stock.empty:
@@ -125,7 +125,7 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); log_transaction("대여", stock.loc[sel, '이름'], qty, tgt, datetime.now().strftime("%Y-%m-%d"), str(r_date)); st.rerun()
         else: st.warning("대여 가능한 재고 없음")
 
-    # 3. 현장 출고
+    # --- 3. 현장 출고 ---
     with tabs[2]:
         stock_disp = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'] > 0)]
         if not stock_disp.empty:
@@ -140,7 +140,7 @@ def main_app():
                     st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_d])], ignore_index=True)
                     save_data(st.session_state.df, "Sheet1"); log_transaction("현장출고", stock_disp.loc[sel_disp, '이름'], qty_disp, site, datetime.now().strftime("%Y-%m-%d")); st.rerun()
 
-    # 4. 반납 처리
+    # --- 4. 반납 처리 ---
     with tabs[3]:
         rented = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['대여 중', '현장 출고'])]
         if not rented.empty:
@@ -158,7 +158,7 @@ def main_app():
                 save_data(st.session_state.df, "Sheet1"); log_transaction("반납", item['이름'], item['수량'], item['대여자'], datetime.now().strftime("%Y-%m-%d")); st.rerun()
         else: st.info("반납할 장비 없음")
 
-    # 5. 수리/파손
+    # --- 5. 수리/파손 ---
     with tabs[4]:
         m_df = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['재고', '수리 중', '파손'])]
         if not m_df.empty:
@@ -169,44 +169,46 @@ def main_app():
                 st.session_state.df.at[sel_m, '대여여부'] = new_stat
                 save_data(st.session_state.df, "Sheet1"); st.success("변경 완료"); st.rerun()
 
-    # 6. 내역 관리
+    # --- 6. 내역 관리 ---
     with tabs[5]:
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # 7. 관리자 페이지 (강화)
+    # --- 7. 관리자 페이지 (IndexError 및 KeyError 완전 해결) ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
             # A. 장비 삭제 요청 승인
             st.subheader("🗑️ 장비 삭제 요청 승인")
-            del_requests = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
-            if not del_requests.empty:
-                for idx, row in del_requests.iterrows():
-                    ca, cb, cc = st.columns([3, 1, 1])
-                    ca.write(f"📂 **{row['이름']}** ({row['브랜드']}) | 수량: {row['수량']}")
-                    if cb.button("✅ 삭제 승인", key=f"d_ok_{idx}"):
-                        st.session_state.df = st.session_state.df.drop(idx).reset_index(drop=True)
-                        save_data(st.session_state.df, "Sheet1"); st.error("영구 삭제됨"); st.rerun()
-                    if cc.button("❌ 반려", key=f"d_no_{idx}"):
-                        st.session_state.df.at[idx, '삭제요청'] = ""
-                        save_data(st.session_state.df, "Sheet1"); st.info("반려됨"); st.rerun()
-            else: st.info("삭제 대기 중인 장비 없음")
+            if '삭제요청' in st.session_state.df.columns:
+                del_requests = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
+                if not del_requests.empty:
+                    for idx, row in del_requests.iterrows():
+                        ca, cb, cc = st.columns([3, 1, 1])
+                        ca.write(f"📂 **{row['이름']}** ({row['브랜드']}) | 수량: {row['수량']}")
+                        if cb.button("✅ 삭제 승인", key=f"d_ok_{idx}"):
+                            st.session_state.df = st.session_state.df.drop(idx).reset_index(drop=True)
+                            save_data(st.session_state.df, "Sheet1"); st.error("영구 삭제됨"); st.rerun()
+                        if cc.button("❌ 반려", key=f"d_no_{idx}"):
+                            st.session_state.df.at[idx, '삭제요청'] = ""
+                            save_data(st.session_state.df, "Sheet1"); st.info("반려됨"); st.rerun()
+                else: st.info("삭제 대기 중인 장비 없음")
             
             st.write("---")
             # B. 회원 가입 승인
             u_df = load_data("Users")
             st.subheader("⏳ 회원 가입 승인")
-            pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
-            if not pending.empty:
-                for idx, row in pending.iterrows():
-                    c1, c2, c3 = st.columns([3, 1, 1])
-                    c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
-                    if c2.button("✅ 승인", key=f"u_ok_{idx}"):
-                        u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.rerun()
-                    if c3.button("❌ 거절", key=f"u_no_{idx}"):
-                        u_df = u_df.drop(idx); save_data(u_df, "Users"); st.rerun()
-            else: st.info("대기 중인 회원 없음")
+            if not u_df.empty and 'approved' in u_df.columns:
+                pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
+                if not pending.empty:
+                    for idx, row in pending.iterrows():
+                        c1, c2, c3 = st.columns([3, 1, 1])
+                        c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
+                        if c2.button("✅ 승인", key=f"u_ok_{idx}"):
+                            u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.rerun()
+                        if c3.button("❌ 거절", key=f"u_no_{idx}"):
+                            u_df = u_df.drop(idx); save_data(u_df, "Users"); st.rerun()
+                else: st.info("대기 회원 없음")
 
 # 4. 로그인 및 실행
 def login_page():
@@ -218,10 +220,11 @@ def login_page():
                 st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
             u_df = load_data("Users")
             hp = hashlib.sha256(p.encode()).hexdigest()
-            user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
-            if not user.empty and str(user.iloc[0]['approved']).upper() == 'TRUE':
-                st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
-            else: st.error("정보 불일치 또는 승인 대기")
+            if not u_df.empty:
+                user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
+                if not user.empty and str(user.iloc[0]['approved']).upper() == 'TRUE':
+                    st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
+                else: st.error("정보 불일치 또는 승인 대기")
 
 if __name__ == '__main__':
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
