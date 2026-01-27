@@ -71,8 +71,10 @@ def to_excel(df_list, sheet_names):
 
 # 3. 메인 앱 실행 함수
 def main_app():
-    if 'df' not in st.session_state:
-        st.session_state.df = load_data("Sheet1")
+    # [보완 추가] 앱 시작 시 장비 데이터 새로 로드
+    st.session_state.df = load_data("Sheet1")
+    # [보완 추가] 회원 관리 기능을 위해 매 실행 시마다 유저 데이터를 최신으로 동기화
+    u_df_current = load_data("Users")
     
     df = st.session_state.df
     is_admin = (st.session_state.username == "admin")
@@ -259,7 +261,7 @@ def main_app():
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 탭 7: 관리자 페이지 (회원 관리 기능 보강) ---
+    # --- 탭 7: 관리자 페이지 (데이터 최신 동기화 적용) ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
@@ -286,38 +288,35 @@ def main_app():
             
             st.write("---")
             
-            # [수정] 회원 관리 섹션 (데이터 즉시 갱신 추가)
-            u_df = load_data("Users")
-            
-            # B-1. 회원 가입 승인 대기 명단
+            # [보완 추가] B-1. 회원 가입 승인 대기 명단 (최신 u_df_current 사용)
             st.subheader("⏳ 회원 가입 승인 대기")
-            if not u_df.empty:
+            if not u_df_current.empty:
                 # [해결] TRUE, 1, T가 아닌 모든 대기 상태 추출
-                pending_users = u_df[~u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
+                pending_users = u_df_current[~u_df_current['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 if not pending_users.empty:
                     for idx, row in pending_users.iterrows():
                         ca, cb, cc = st.columns([3, 1, 1])
                         birth_val = row.get('birth', '정보없음')
                         ca.write(f"👤 **성명: {row['username']}** | 생년월일: {birth_val}")
                         if cb.button("✅ 최종 가입 승인", key=f"u_ok_{idx}"):
-                            u_df.at[idx, 'approved'] = 'TRUE' # 상태를 TRUE로 변경
-                            save_data(u_df, "Users") # 시트 저장
+                            u_df_current.at[idx, 'approved'] = 'TRUE'
+                            save_data(u_df_current, "Users") 
                             st.success(f"{row['username']}님 승인 완료")
-                            st.rerun() # [해결] 즉시 화면 갱신하여 회원 목록으로 이동시킴
+                            st.rerun() # 즉시 갱신
                         if cc.button("❌ 가입 거절", key=f"u_no_{idx}"):
-                            u_df = u_df.drop(idx)
-                            save_data(u_df, "Users")
+                            u_df_current = u_df_current.drop(idx)
+                            save_data(u_df_current, "Users")
                             st.warning("신청 정보가 삭제되었습니다.")
                             st.rerun()
                 else: st.info("현재 대기 중인 가입 신청자가 없습니다.")
             
             st.write("---")
             
-            # B-2. 전체 회원 관리 (승인된 인원 목록 및 삭제)
+            # [보완 추가] B-2. 전체 회원 관리 (최신 u_df_current 사용)
             st.subheader("👥 전체 회원 관리")
-            if not u_df.empty:
-                # [해결] 데이터 로드를 최신화하여 승인된 사용자 추출
-                approved_users = u_df[u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
+            if not u_df_current.empty:
+                # 승인된 사용자만 추출
+                approved_users = u_df_current[u_df_current['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 
                 if not approved_users.empty:
                     # 표 형식으로 회원 명단 표시
@@ -331,8 +330,8 @@ def main_app():
                     if manage_list:
                         del_target = st.selectbox("관리(삭제)할 회원 선택", manage_list)
                         if st.button("🔥 회원 계정 영구 삭제"):
-                            u_df = u_df[u_df['username'] != del_target]
-                            save_data(u_df, "Users")
+                            u_df_new = u_df_current[u_df_current['username'] != del_target]
+                            save_data(u_df_new, "Users")
                             st.error(f"'{del_target}' 회원의 계정이 삭제되었습니다.")
                             st.rerun()
                     else:
@@ -350,7 +349,6 @@ def login_page():
             u_name = st.text_input("성명 (ID)")
             u_pw = st.text_input("비밀번호 (PW)", type="password")
             if st.form_submit_button("로그인"):
-                # [해결] 관리자 마스터 계정 강제 고정
                 if u_name == "admin" and u_pw == "1234":
                     st.session_state.logged_in, st.session_state.username = True, u_name
                     st.rerun()
@@ -361,7 +359,6 @@ def login_page():
                     user_match = users[(users['username'].astype(str) == str(u_name)) & 
                                        (users['password'].astype(str) == str(hashed_pw))]
                     if not user_match.empty:
-                        # [해결] 1 또는 TRUE 대응
                         if str(user_match.iloc[0]['approved']).upper() in ['TRUE', '1', 'T']:
                             st.session_state.logged_in, st.session_state.username = True, u_name
                             st.rerun()
