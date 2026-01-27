@@ -13,7 +13,7 @@ from streamlit_gsheets import GSheetsConnection
 # ====================================================================
 st.set_page_config(page_title="통합 장비 관리 시스템", layout="wide", page_icon="🛠️")
 
-# 구글 시트 연결
+# 구글 시트 연결 (Secrets 사용)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
@@ -23,7 +23,7 @@ except Exception as e:
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 데이터 처리 함수 (정수 처리 및 공백 제거 강화)
+# 2. 데이터 처리 함수 (정수화 및 공백 제거 필수 적용)
 # ====================================================================
 
 def load_data(sheet_name="Sheet1"):
@@ -32,14 +32,14 @@ def load_data(sheet_name="Sheet1"):
         df = conn.read(worksheet=sheet_name, ttl="0")
         df = df.fillna("")
         if not df.empty and '수량' in df.columns:
-            # 수량을 숫자로 변환 후 소수점 제거 (정수화)
+            # 모든 숫자를 소수점 없는 정수로 변환
             df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
         return df
     except:
         return pd.DataFrame(columns=FIELD_NAMES if sheet_name=="Sheet1" else [])
 
 def save_data(df, sheet_name="Sheet1"):
-    """구글 시트에 데이터를 저장 (저장 전 정수화 확인)"""
+    """구글 시트에 데이터를 저장 (저장 전 정수화 강제)"""
     if '수량' in df.columns:
         df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
     conn.update(worksheet=sheet_name, data=df)
@@ -66,7 +66,7 @@ def hash_password(password):
 # 3. 메인 앱 UI (main_app)
 # ====================================================================
 def main_app():
-    # 데이터 로드
+    # 세션 상태에 데이터 로드 (최초 1회)
     if 'df' not in st.session_state:
         st.session_state.df = load_data("Sheet1")
     
@@ -75,6 +75,7 @@ def main_app():
 
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
+        st.caption(f"권한: {user_role}")
         if st.button("🔄 데이터 새로고침"):
             st.session_state.df = load_data("Sheet1")
             st.rerun()
@@ -84,8 +85,9 @@ def main_app():
 
     st.title("🛠️ 통합 장비 관리 시스템")
 
-    # 상단 요약 지표 (소수점 없이 정수 표시)
+    # 상단 요약 지표 (소수점 제거 및 공백 방지 필터링)
     c1, c2, c3, c4 = st.columns(4)
+    # .str.strip()을 넣어 '재고 ' 처럼 공백이 있어도 인식하게 수정
     c1.metric("🚚 대여 중", int(df[df['대여여부'].str.strip() == '대여 중']['수량'].sum()) if not df.empty else 0)
     c2.metric("🎬 현장 출고", int(df[df['대여여부'].str.strip() == '현장 출고']['수량'].sum()) if not df.empty else 0)
     c3.metric("🛠️ 수리 중", int(df[df['대여여부'].str.strip() == '수리 중']['수량'].sum()) if not df.empty else 0)
@@ -106,13 +108,14 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1")
                     st.success("등록 완료"); st.rerun()
         
-        edit_mode = st.toggle("🔓 수정 모드")
+        edit_mode = st.toggle("🔓 데이터 수정 모드 활성화")
+        # 데이터 에디터에서도 수량은 정수형 유지
         edited = st.data_editor(st.session_state.df, disabled=(not edit_mode), hide_index=True, use_container_width=True)
-        if edit_mode and st.button("💾 시트에 저장"):
+        if edit_mode and st.button("💾 시트에 데이터 저장"):
             save_data(edited, "Sheet1"); st.session_state.df = edited; st.success("저장 완료"); st.rerun()
 
     with tabs[1]: # 외부 대여
-        st.subheader("📤 외부 업체 대여")
+        st.subheader("📤 외부 업체 대여 처리")
         stock = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'].astype(int) > 0)]
         if not stock.empty:
             opts = stock.apply(lambda x: f"{x['이름']} ({x['브랜드']}) - 잔여: {int(x['수량'])}개", axis=1)
@@ -131,10 +134,10 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1")
                     log_transaction("대여", item['이름'], qty, target, datetime.now().strftime("%Y-%m-%d"), str(r_date))
                     st.success("대여 완료"); st.rerun()
-        else: st.warning("대여 가능한 '재고'가 없습니다.")
+        else: st.warning("대여 가능한 '재고' 상태의 장비가 없습니다.")
 
-    with tabs[3]: # 반납
-        st.subheader("📥 장비 반납")
+    with tabs[3]: # 반납 로직 보강
+        st.subheader("📥 장비 반납 처리")
         rented = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['대여 중', '현장 출고'])]
         if not rented.empty:
             r_opts = rented.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']} ({int(x['수량'])}개)", axis=1)
@@ -150,6 +153,7 @@ def main_app():
                 save_data(st.session_state.df, "Sheet1")
                 log_transaction("반납", item['이름'], item['수량'], item['대여자'], datetime.now().strftime("%Y-%m-%d"))
                 st.success("반납 완료"); st.rerun()
+        else: st.info("반납할 장비가 없습니다.")
 
     with tabs[5]: # 내역 관리
         st.subheader("📜 활동 기록")
@@ -157,7 +161,7 @@ def main_app():
         st.dataframe(logs.iloc[::-1], use_container_width=True)
 
 # ====================================================================
-# 4. 로그인 및 실행 제어 (로그인 후 화면 안 뜨는 문제 해결)
+# 4. 로그인 및 화면 분기 제어 (가장 중요)
 # ====================================================================
 def login_page():
     st.title("🔒 통합 장비 관리 시스템")
@@ -165,27 +169,41 @@ def login_page():
         u = st.text_input("아이디")
         p = st.text_input("비밀번호", type="password")
         if st.form_submit_button("로그인"):
+            # 비상 로그인 (시트 오류 시 대비)
             if u == "admin" and p == "1234":
-                st.session_state.logged_in, st.session_state.username, st.session_state.role = True, u, "admin"
+                st.session_state.logged_in = True
+                st.session_state.username = "admin"
+                st.session_state.role = "admin"
                 st.rerun()
+            
+            # 구글 시트 Users 탭 확인
             try:
                 u_df = load_data("Users")
                 hp = hashlib.sha256(p.encode()).hexdigest()
-                user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
-                if not user.empty and str(user.iloc[0]['approved']).upper() == 'TRUE':
-                    st.session_state.logged_in, st.session_state.username, st.session_state.role = True, u, user.iloc[0]['role']
-                    st.rerun()
-                else: st.error("로그인 실패 또는 승인 대기 중")
-            except:
-                st.error("사용자 정보를 불러올 수 없습니다.")
+                user_match = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
+                
+                if not user_match.empty:
+                    user_data = user_match.iloc[0]
+                    if str(user_data['approved']).upper() == 'TRUE':
+                        st.session_state.logged_in = True
+                        st.session_state.username = u
+                        st.session_state.role = user_data['role']
+                        st.rerun()
+                    else:
+                        st.error("관리자 승인이 필요한 계정입니다.")
+                else:
+                    st.error("아이디 또는 비밀번호가 틀렸습니다.")
+            except Exception as e:
+                st.error("사용자 데이터를 불러오는데 실패했습니다.")
 
+# --- 앱 실행 엔트리 포인트 ---
 if __name__ == '__main__':
-    # 세션 초기화
+    # 1. 세션 상태 초기화
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
-    
-    # 로그인 여부에 따른 화면 분기
+
+    # 2. 로그인 상태에 따른 화면 출력 (이 부분이 명확해야 함)
     if st.session_state.logged_in:
-        main_app() # 로그인 상태면 반드시 메인 대시보드 함수를 실행
+        main_app() # 로그인 상태면 메인 대시보드 호출
     else:
-        login_page() # 로그인 전에는 로그인 페이지만 표시
+        login_page() # 아니면 로그인 페이지 호출
