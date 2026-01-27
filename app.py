@@ -60,21 +60,16 @@ def main_app():
 
     st.title("🛠️ 통합 장비 관리 시스템")
 
-    # 상단 요약 지표
+    # 상단 요약 지표 (공백 제거 필터 적용)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🚚 대여 중", int(df[df['대여여부'].str.strip() == '대여 중']['수량'].sum()) if not df.empty else 0)
     c2.metric("🎬 현장 출고", int(df[df['대여여부'].str.strip() == '현장 출고']['수량'].sum()) if not df.empty else 0)
     c3.metric("🛠️ 수리 중", int(df[df['대여여부'].str.strip() == '수리 중']['수량'].sum()) if not df.empty else 0)
     c4.metric("💔 파손", int(df[df['대여여부'].str.strip() == '파손']['수량'].sum()) if not df.empty else 0)
 
-    # 탭 메뉴 구성 (관리자 전용 탭 포함)
-    tab_titles = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"]
-    if st.session_state.username == "admin":
-        tab_titles.append("👑 관리자 페이지")
-    
-    tabs = st.tabs(tab_titles)
+    tabs = st.tabs(["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"])
 
-    # --- 1. 재고 관리 ---
+    # --- 1~3번 탭 (원본 유지) ---
     with tabs[0]:
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
@@ -90,7 +85,6 @@ def main_app():
         if edit_m and st.button("💾 모든 변경사항 저장"):
             save_data(edited, "Sheet1"); st.session_state.df = edited; st.success("저장 완료"); st.rerun()
 
-    # --- 2. 외부 대여 ---
     with tabs[1]:
         st.subheader("📤 외부 업체 대여")
         stock = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'] > 0)]
@@ -109,7 +103,6 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); log_transaction("외부대여", item['이름'], qty, tgt, datetime.now().strftime("%Y-%m-%d"), str(r_date))
                     st.success("대여 완료"); st.rerun()
 
-    # --- 3. 현장 출고 ---
     with tabs[2]:
         st.subheader("🎬 현장 출고")
         stock_disp = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'] > 0)]
@@ -127,26 +120,41 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); log_transaction("현장출고", item['이름'], qty_disp, site, datetime.now().strftime("%Y-%m-%d"))
                     st.success("출고 완료"); st.rerun()
 
-    # --- 4. 반납 ---
+    # --- 🟢 4번 탭 (반납): 수정된 핵심 로직 ---
     with tabs[3]:
         st.subheader("📥 장비 반납 처리")
+        # [수정] .str.strip()을 사용하여 공백 문제를 해결하고, 대여 중/현장 출고 장비를 모두 불러옴
         rented = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['대여 중', '현장 출고'])]
+        
         if not rented.empty:
+            # 목록 표시 시에도 공백을 제거한 상태를 보여줌
             r_opts = rented.apply(lambda x: f"[{x['대여여부'].strip()}] {x['이름']} - {x['대여자']} ({int(x['수량'])}개)", axis=1)
             sel_ret = st.selectbox("반납 대상 선택", r_opts.index, format_func=lambda x: r_opts[x])
+            
             if st.button("반납 확정"):
                 item = rented.loc[sel_ret]
+                # 원래 재고 항목을 찾아 수량을 합침 (이름과 재고 상태가 일치하는 행)
                 mask = (st.session_state.df['이름'] == item['이름']) & (st.session_state.df['대여여부'].str.strip() == '재고')
+                
                 if any(mask):
                     idx = st.session_state.df[mask].index[0]
-                    st.session_state.df.at[idx, '수량'] += int(item['수량'])
+                    st.session_state.df.at[idx, '수량'] = int(st.session_state.df.at[idx, '수량']) + int(item['수량'])
+                    # 대여 기록 행은 삭제 (재고 수량만 업데이트)
                     st.session_state.df = st.session_state.df.drop(sel_ret).reset_index(drop=True)
                 else:
-                    st.session_state.df.at[sel_ret, '대여여부'] = '재고'; st.session_state.df.at[sel_ret, '대여자'] = ''
-                save_data(st.session_state.df, "Sheet1"); log_transaction("반납", item['이름'], item['수량'], item['대여자'], datetime.now().strftime("%Y-%m-%d"))
-                st.success("반납 완료"); st.rerun()
+                    # 일치하는 재고 행이 없으면 현재 행을 '재고'로 변경
+                    st.session_state.df.at[sel_ret, '대여여부'] = '재고'
+                    st.session_state.df.at[sel_ret, '대여자'] = ''
+                    st.session_state.df.at[sel_ret, '대여일'] = ''
+                    st.session_state.df.at[sel_ret, '반납예정일'] = ''
+                
+                save_data(st.session_state.df, "Sheet1")
+                log_transaction("반납", item['이름'], item['수량'], item['대여자'], datetime.now().strftime("%Y-%m-%d"))
+                st.success(f"{item['이름']} 반납 완료"); st.rerun()
+        else:
+            st.info("현재 대여 중이거나 출고된 장비가 없습니다.")
 
-    # --- 5. 수리/파손 ---
+    # --- 5~7번 탭 (원본 유지) ---
     with tabs[4]:
         st.subheader("🛠️ 수리 및 파손")
         m_df = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['재고', '수리 중', '파손'])]
@@ -158,12 +166,10 @@ def main_app():
                 st.session_state.df.at[sel_m, '대여여부'] = new_stat
                 save_data(st.session_state.df, "Sheet1"); st.success("변경 완료"); st.rerun()
 
-    # --- 6. 내역 관리 ---
     with tabs[5]:
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 👑 7. 관리자 페이지 (신규 추가) ---
     if st.session_state.username == "admin":
         with tabs[6]:
             st.header("👑 관리자 페이지")
@@ -182,7 +188,7 @@ def main_app():
                         save_data(u_df, "Users"); st.warning("삭제됨"); st.rerun()
             else: st.info("대기 중인 회원이 없습니다.")
 
-# 4. 로그인 로직
+# --- 로그인 로직 (원본 유지) ---
 def login_page():
     st.title("🔒 통합 장비 관리 시스템 로그인")
     with st.form("login"):
