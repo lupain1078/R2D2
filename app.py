@@ -4,6 +4,7 @@ import os
 import uuid
 import hashlib
 from datetime import datetime
+from io import BytesIO
 from streamlit_gsheets import GSheetsConnection
 
 # 1. 설정 및 구글 시트 연결
@@ -19,12 +20,10 @@ def load_data(sheet_name="Sheet1"):
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.fillna("")
         
-        # [해결] Sheet1에서 '삭제요청' 열이 없어서 발생하는 KeyError 방지
         if sheet_name == "Sheet1":
             if not df.empty:
                 if '삭제요청' not in df.columns:
                     df['삭제요청'] = ""
-                # 수량 정수화 (.0 제거)
                 df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
             else:
                 df = pd.DataFrame(columns=FIELD_NAMES)
@@ -51,6 +50,14 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
         save_data(log_df, "Logs")
     except: pass
 
+# 엑셀 다운로드 생성 함수
+def to_excel(df_list, sheet_names):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for df, name in zip(df_list, sheet_names):
+            df.to_excel(writer, index=False, sheet_name=name)
+    return output.getvalue()
+
 # 3. 메인 앱 UI
 def main_app():
     if 'df' not in st.session_state:
@@ -59,12 +66,42 @@ def main_app():
     df = st.session_state.df
     is_admin = (st.session_state.username == "admin")
 
+    # --- 사이드바 구성 (데이터 관리 추가) ---
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
-        if st.button("🔄 데이터 새로고침"):
+        
+        # 1. 새로고침 버튼
+        if st.button("🔄 데이터 새로고침", use_container_width=True):
             st.session_state.df = load_data("Sheet1")
             st.rerun()
-        if st.button("🚪 로그아웃"):
+        
+        # 2. 데이터 관리 (백업 기능) 추가
+        with st.expander("📂 데이터 관리", expanded=False):
+            st.write("시스템의 모든 데이터를 엑셀로 백업합니다.")
+            if st.button("📊 백업 파일 생성", use_container_width=True):
+                with st.spinner("파일 생성 중..."):
+                    # 시트별 데이터 로드
+                    logs_df = load_data("Logs")
+                    users_df = load_data("Users")
+                    
+                    # 엑셀 파일 변환
+                    excel_data = to_excel(
+                        [st.session_state.df, logs_df, users_df], 
+                        ["장비재고", "활동로그", "회원명단"]
+                    )
+                    
+                    # 다운로드 버튼 생성
+                    st.download_button(
+                        label="📥 엑셀 다운로드",
+                        data=excel_data,
+                        file_name=f"장비관리_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+        
+        st.write("---")
+        # 3. 로그아웃 버튼
+        if st.button("🚪 로그아웃", use_container_width=True):
             for key in list(st.session_state.keys()): del st.session_state[key]
             st.rerun()
 
@@ -77,14 +114,14 @@ def main_app():
     c3.metric("🛠️ 수리 중", int(df[df['대여여부'].str.strip() == '수리 중']['수량'].sum()) if not df.empty else 0)
     c4.metric("💔 파손", int(df[df['대여여부'].str.strip() == '파손']['수량'].sum()) if not df.empty else 0)
 
-    # [해결] IndexError 방지를 위해 사용 가능한 탭 리스트 생성
+    # 탭 메뉴 구성 (IndexError 방지)
     tab_list = ["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"]
     if is_admin:
         tab_list.append("👑 관리자 페이지")
     
     tabs = st.tabs(tab_list)
 
-    # --- 1. 재고 관리 (삭제 요청 포함) ---
+    # --- 1. 재고 관리 ---
     with tabs[0]:
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
@@ -97,7 +134,6 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); st.rerun()
         
         edit_m = st.toggle("🔓 수정 및 삭제 요청 모드")
-        # 데이터 에디터에서 정수 수량 유지
         edited = st.data_editor(st.session_state.df, disabled=(not edit_m), hide_index=True, use_container_width=True)
         if edit_m:
             if st.button("💾 모든 변경사항 저장"):
@@ -123,7 +159,7 @@ def main_app():
                     new_r.update({'ID': str(uuid.uuid4()), '수량': int(qty), '대여여부': '대여 중', '대여자': tgt, '대여일': datetime.now().strftime("%Y-%m-%d"), '반납예정일': str(r_date)})
                     st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_r])], ignore_index=True)
                     save_data(st.session_state.df, "Sheet1"); log_transaction("대여", stock.loc[sel, '이름'], qty, tgt, datetime.now().strftime("%Y-%m-%d"), str(r_date)); st.rerun()
-        else: st.warning("대여 가능한 재고 없음")
+        else: st.warning("재고 없음")
 
     # --- 3. 현장 출고 ---
     with tabs[2]:
@@ -156,7 +192,7 @@ def main_app():
                 else:
                     st.session_state.df.at[sel_ret, '대여여부'] = '재고'; st.session_state.df.at[sel_ret, '대여자'] = ''
                 save_data(st.session_state.df, "Sheet1"); log_transaction("반납", item['이름'], item['수량'], item['대여자'], datetime.now().strftime("%Y-%m-%d")); st.rerun()
-        else: st.info("반납할 장비 없음")
+        else: st.info("반납 대상 없음")
 
     # --- 5. 수리/파손 ---
     with tabs[4]:
@@ -174,11 +210,10 @@ def main_app():
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 7. 관리자 페이지 (IndexError 및 KeyError 완전 해결) ---
+    # --- 7. 관리자 페이지 ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
-            # A. 장비 삭제 요청 승인
             st.subheader("🗑️ 장비 삭제 요청 승인")
             if '삭제요청' in st.session_state.df.columns:
                 del_requests = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
@@ -186,29 +221,25 @@ def main_app():
                     for idx, row in del_requests.iterrows():
                         ca, cb, cc = st.columns([3, 1, 1])
                         ca.write(f"📂 **{row['이름']}** ({row['브랜드']}) | 수량: {row['수량']}")
-                        if cb.button("✅ 삭제 승인", key=f"d_ok_{idx}"):
+                        if cb.button("✅ 승인", key=f"d_ok_{idx}"):
                             st.session_state.df = st.session_state.df.drop(idx).reset_index(drop=True)
                             save_data(st.session_state.df, "Sheet1"); st.error("영구 삭제됨"); st.rerun()
                         if cc.button("❌ 반려", key=f"d_no_{idx}"):
                             st.session_state.df.at[idx, '삭제요청'] = ""
                             save_data(st.session_state.df, "Sheet1"); st.info("반려됨"); st.rerun()
-                else: st.info("삭제 대기 중인 장비 없음")
             
             st.write("---")
-            # B. 회원 가입 승인
             u_df = load_data("Users")
-            st.subheader("⏳ 회원 가입 승인")
-            if not u_df.empty and 'approved' in u_df.columns:
-                pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
-                if not pending.empty:
-                    for idx, row in pending.iterrows():
-                        c1, c2, c3 = st.columns([3, 1, 1])
-                        c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
-                        if c2.button("✅ 승인", key=f"u_ok_{idx}"):
-                            u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.rerun()
-                        if c3.button("❌ 거절", key=f"u_no_{idx}"):
-                            u_df = u_df.drop(idx); save_data(u_df, "Users"); st.rerun()
-                else: st.info("대기 회원 없음")
+            st.subheader("👥 회원 관리")
+            pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
+            if not pending.empty:
+                for idx, row in pending.iterrows():
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
+                    if c2.button("✅ 승인", key=f"u_ok_{idx}"):
+                        u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.rerun()
+                    if c3.button("❌ 거절", key=f"u_no_{idx}"):
+                        u_df = u_df.drop(idx); save_data(u_df, "Users"); st.rerun()
 
 # 4. 로그인 및 실행
 def login_page():
@@ -224,7 +255,7 @@ def login_page():
                 user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
                 if not user.empty and str(user.iloc[0]['approved']).upper() == 'TRUE':
                     st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
-                else: st.error("정보 불일치 또는 승인 대기")
+                else: st.error("로그인 정보 불일치 또는 승인 대기 중")
 
 if __name__ == '__main__':
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
