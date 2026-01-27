@@ -13,7 +13,7 @@ from streamlit_gsheets import GSheetsConnection
 # ====================================================================
 st.set_page_config(page_title="통합 장비 관리 시스템", layout="wide", page_icon="🛠️")
 
-# 구글 시트 연결 (Secrets 설정을 자동으로 사용)
+# 구글 시트 연결
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
@@ -23,7 +23,7 @@ except Exception as e:
 FIELD_NAMES = ['ID', '타입', '이름', '수량', '브랜드', '특이사항', '대여업체', '대여여부', '대여자', '대여일', '반납예정일', '출고비고', '사진']
 
 # ====================================================================
-# 2. 데이터 처리 함수 (정수 처리 강화)
+# 2. 데이터 처리 함수 (정수 처리 및 공백 제거 강화)
 # ====================================================================
 
 def load_data(sheet_name="Sheet1"):
@@ -32,7 +32,7 @@ def load_data(sheet_name="Sheet1"):
         df = conn.read(worksheet=sheet_name, ttl="0")
         df = df.fillna("")
         if not df.empty and '수량' in df.columns:
-            # 모든 수량을 숫자로 변환 후 소수점 제거 (정수화)
+            # 수량을 숫자로 변환 후 소수점 제거 (정수화)
             df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0).astype(int)
         return df
     except:
@@ -63,10 +63,10 @@ def hash_password(password):
     return hashlib.sha256(str(password).encode()).hexdigest()
 
 # ====================================================================
-# 3. 메인 앱 화면 (main_app)
+# 3. 메인 앱 UI (main_app)
 # ====================================================================
 def main_app():
-    # 세션 상태에 데이터 로드
+    # 데이터 로드
     if 'df' not in st.session_state:
         st.session_state.df = load_data("Sheet1")
     
@@ -84,12 +84,12 @@ def main_app():
 
     st.title("🛠️ 통합 장비 관리 시스템")
 
-    # 상단 요약 지표 (소수점 제거)
+    # 상단 요약 지표 (소수점 없이 정수 표시)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🚚 대여 중", int(df[df['대여여부'] == '대여 중']['수량'].sum()) if not df.empty else 0)
-    c2.metric("🎬 현장 출고", int(df[df['대여여부'] == '현장 출고']['수량'].sum()) if not df.empty else 0)
-    c3.metric("🛠️ 수리 중", int(df[df['대여여부'] == '수리 중']['수량'].sum()) if not df.empty else 0)
-    c4.metric("💔 파손", int(df[df['대여여부'] == '파손']['수량'].sum()) if not df.empty else 0)
+    c1.metric("🚚 대여 중", int(df[df['대여여부'].str.strip() == '대여 중']['수량'].sum()) if not df.empty else 0)
+    c2.metric("🎬 현장 출고", int(df[df['대여여부'].str.strip() == '현장 출고']['수량'].sum()) if not df.empty else 0)
+    c3.metric("🛠️ 수리 중", int(df[df['대여여부'].str.strip() == '수리 중']['수량'].sum()) if not df.empty else 0)
+    c4.metric("💔 파손", int(df[df['대여여부'].str.strip() == '파손']['수량'].sum()) if not df.empty else 0)
 
     tabs = st.tabs(["📋 재고 관리", "📤 외부 대여", "🎬 현장 출고", "📥 반납", "🛠️ 수리/파손", "📜 내역 관리"])
 
@@ -111,14 +111,9 @@ def main_app():
         if edit_mode and st.button("💾 시트에 저장"):
             save_data(edited, "Sheet1"); st.session_state.df = edited; st.success("저장 완료"); st.rerun()
 
-    with tabs[1]: # 외부 대여 (필터링 강화)
+    with tabs[1]: # 외부 대여
         st.subheader("📤 외부 업체 대여")
-        # '재고' 상태이고 수량이 0보다 큰 것만 필터링 (공백 제거 적용)
-        stock = st.session_state.df[
-            (st.session_state.df['대여여부'].str.strip() == '재고') & 
-            (st.session_state.df['수량'].astype(int) > 0)
-        ]
-        
+        stock = st.session_state.df[(st.session_state.df['대여여부'].str.strip() == '재고') & (st.session_state.df['수량'].astype(int) > 0)]
         if not stock.empty:
             opts = stock.apply(lambda x: f"{x['이름']} ({x['브랜드']}) - 잔여: {int(x['수량'])}개", axis=1)
             sel_idx = st.selectbox("대여할 장비 선택", opts.index, format_func=lambda x: opts[x])
@@ -136,10 +131,9 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1")
                     log_transaction("대여", item['이름'], qty, target, datetime.now().strftime("%Y-%m-%d"), str(r_date))
                     st.success("대여 완료"); st.rerun()
-        else:
-            st.warning("대여 가능한 '재고' 장비가 없습니다.")
+        else: st.warning("대여 가능한 '재고'가 없습니다.")
 
-    with tabs[3]: # 반납 로직
+    with tabs[3]: # 반납
         st.subheader("📥 장비 반납")
         rented = st.session_state.df[st.session_state.df['대여여부'].str.strip().isin(['대여 중', '현장 출고'])]
         if not rented.empty:
@@ -163,7 +157,7 @@ def main_app():
         st.dataframe(logs.iloc[::-1], use_container_width=True)
 
 # ====================================================================
-# 4. 로그인 및 실행 제어 (가장 중요)
+# 4. 로그인 및 실행 제어 (핵심 수정 부분)
 # ====================================================================
 def login_page():
     st.title("🔒 통합 장비 관리 시스템")
@@ -190,6 +184,6 @@ if __name__ == '__main__':
         st.session_state.logged_in = False
     
     if st.session_state.logged_in:
-        main_app() # 로그인 성공 시 메인 대시보드 호출
+        main_app() # 로그인 성공 시 메인 대시보드 함수 호출
     else:
-        login_page() # 미로그인 시 로그인 페이지 호출
+        login_page() # 로그인 전에는 로그인 페이지만 표시
