@@ -29,7 +29,7 @@ def load_data(sheet_name="Sheet1"):
                 df = pd.DataFrame(columns=FIELD_NAMES)
         return df
     except:
-        return pd.DataFrame(columns=FIELD_NAMES if sheet_name=="Sheet1" else [])
+        return pd.DataFrame()
 
 def save_data(df, sheet_name="Sheet1"):
     if sheet_name == "Sheet1" and '수량' in df.columns:
@@ -50,7 +50,6 @@ def log_transaction(kind, item_name, qty, target, date_val, return_val=''):
         save_data(log_df, "Logs")
     except: pass
 
-# 엑셀 다운로드 생성 함수
 def to_excel(df_list, sheet_names):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -69,8 +68,6 @@ def main_app():
     # --- 사이드바 구성 ---
     with st.sidebar:
         st.header(f"👤 {st.session_state.username}님")
-        
-        # 데이터 관리 (백업)
         with st.expander("📂 데이터 관리", expanded=False):
             st.write("시스템 데이터를 엑셀로 백업합니다.")
             if st.button("📊 백업 파일 생성", use_container_width=True):
@@ -84,7 +81,6 @@ def main_app():
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
-        
         st.write("---")
         if st.button("🚪 로그아웃", use_container_width=True):
             for key in list(st.session_state.keys()): del st.session_state[key]
@@ -106,7 +102,7 @@ def main_app():
     
     tabs = st.tabs(tab_list)
 
-    # --- 1. 재고 관리 (ID 숨김 처리 적용) ---
+    # --- 1. 재고 관리 (ID 숨김) ---
     with tabs[0]:
         with st.expander("➕ 새 장비 등록"):
             with st.form("add_form", clear_on_submit=True):
@@ -119,19 +115,8 @@ def main_app():
                     save_data(st.session_state.df, "Sheet1"); st.rerun()
         
         edit_m = st.toggle("🔓 수정 및 삭제 요청 모드")
-        
-        # [수정] column_config를 사용하여 'ID' 열을 숨김 처리함
-        edited = st.data_editor(
-            st.session_state.df, 
-            disabled=(not edit_m), 
-            hide_index=True, 
-            use_container_width=True,
-            column_config={
-                "ID": None,  # 열을 아예 표시하지 않음
-                "삭제요청": st.column_config.Column(width="small")
-            }
-        )
-        
+        edited = st.data_editor(st.session_state.df, disabled=(not edit_m), hide_index=True, use_container_width=True,
+                                column_config={"ID": None})
         if edit_m:
             if st.button("💾 모든 변경사항 저장"):
                 save_data(edited, "Sheet1"); st.session_state.df = edited; st.success("저장 완료"); st.rerun()
@@ -207,10 +192,11 @@ def main_app():
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 7. 관리자 페이지 ---
+    # --- 7. 관리자 전용 페이지 (회원 승인 기능 포함) ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
+            # 장비 삭제 승인
             st.subheader("🗑️ 장비 삭제 요청 승인")
             if '삭제요청' in st.session_state.df.columns:
                 del_req = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
@@ -224,35 +210,74 @@ def main_app():
                         if cc.button("❌ 반려", key=f"d_no_{idx}"):
                             st.session_state.df.at[idx, '삭제요청'] = ""
                             save_data(st.session_state.df, "Sheet1"); st.info("반려됨"); st.rerun()
+                else: st.info("삭제 대기 장비 없음")
             
             st.write("---")
+            # 회원 가입 승인 로직
             u_df = load_data("Users")
             st.subheader("👥 회원 가입 승인")
-            pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
-            if not pending.empty:
-                for idx, row in pending.iterrows():
-                    c1, c2, c3 = st.columns([3, 1, 1])
-                    c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
-                    if c2.button("✅ 승인", key=f"u_ok_{idx}"):
-                        u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.rerun()
-                    if c3.button("❌ 거절", key=f"u_no_{idx}"):
-                        u_df = u_df.drop(idx); save_data(u_df, "Users"); st.rerun()
-
-# 4. 로그인 시스템
-def login_page():
-    st.title("🔒 통합 장비 관리 시스템 로그인")
-    with st.form("login"):
-        u, p = st.text_input("ID"), st.text_input("PW", type="password")
-        if st.form_submit_button("로그인"):
-            if u == "admin" and p == "1234":
-                st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
-            u_df = load_data("Users")
-            hp = hashlib.sha256(p.encode()).hexdigest()
             if not u_df.empty:
-                user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
-                if not user.empty and str(user.iloc[0]['approved']).upper() == 'TRUE':
+                pending = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
+                if not pending.empty:
+                    for idx, row in pending.iterrows():
+                        c1, c2, c3 = st.columns([3, 1, 1])
+                        c1.write(f"🆔 **{row['username']}** | 권한: {row['role']}")
+                        if c2.button("✅ 가입 승인", key=f"u_ok_{idx}"):
+                            u_df.at[idx, 'approved'] = 'TRUE'; save_data(u_df, "Users"); st.success("승인됨"); st.rerun()
+                        if c3.button("❌ 가입 거절", key=f"u_no_{idx}"):
+                            u_df = u_df.drop(idx); save_data(u_df, "Users"); st.warning("삭제됨"); st.rerun()
+                else: st.info("대기 회원 없음")
+
+# 4. 로그인 및 회원가입 페이지 (라디오 버튼 추가)
+def login_page():
+    st.title("🔒 통합 장비 관리 시스템")
+    
+    # 상단 메뉴 선택 [라디오 버튼]
+    choice = st.radio("서비스를 선택하세요", ["로그인", "회원가입"], horizontal=True)
+    
+    if choice == "로그인":
+        with st.form("login_form"):
+            u, p = st.text_input("아이디"), st.text_input("비밀번호", type="password")
+            if st.form_submit_button("로그인"):
+                if u == "admin" and p == "1234":
                     st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
-                else: st.error("정보 불일치 또는 승인 대기")
+                
+                u_df = load_data("Users")
+                # SHA-256 해시 대조
+                hp = hashlib.sha256(p.encode()).hexdigest()
+                if not u_df.empty:
+                    user = u_df[(u_df['username'].astype(str) == str(u)) & (u_df['password'].astype(str) == str(hp))]
+                    if not user.empty:
+                        # 승인 여부 확인 (TRUE인 경우만 허용)
+                        if str(user.iloc[0]['approved']).upper() == 'TRUE':
+                            st.session_state.logged_in, st.session_state.username = True, u; st.rerun()
+                        else:
+                            st.error("관리자의 가입 승인이 완료되지 않았습니다.")
+                    else:
+                        st.error("로그인 정보가 틀렸습니다.")
+                        
+    else: # 회원가입 신청
+        st.subheader("📝 신규 회원가입 신청")
+        with st.form("signup_form"):
+            new_u = st.text_input("아이디 (ID)")
+            new_p = st.text_input("비밀번호 (PW)", type="password")
+            new_r = st.selectbox("사용 권한", ["사용자", "관리자"])
+            if st.form_submit_button("가입 신청하기"):
+                u_df = load_data("Users")
+                if not u_df.empty and new_u in u_df['username'].values:
+                    st.error("이미 존재하는 아이디입니다.")
+                elif not new_u or not new_p:
+                    st.error("아이디와 비밀번호를 모두 입력해주세요.")
+                else:
+                    # 비밀번호 SHA-256 암호화 적용
+                    hashed_p = hashlib.sha256(new_p.encode()).hexdigest()
+                    new_user = {
+                        'username': new_u, 'password': hashed_p, 'role': new_r, 
+                        'approved': 'FALSE', 'created_at': datetime.now().strftime("%Y-%m-%d")
+                    }
+                    u_df = pd.concat([u_df, pd.DataFrame([new_user])], ignore_index=True)
+                    save_data(u_df, "Users")
+                    st.success("신청 완료! 관리자가 '👑 관리자 페이지'에서 승인한 후 로그인이 가능합니다.")
 
 if __name__ == '__main__':
     if 'logged_in' not in st.session_state: st.session_state.logged_in = False
