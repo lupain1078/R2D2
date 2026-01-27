@@ -33,7 +33,7 @@ def load_data(sheet_name="Sheet1"):
             else:
                 df = pd.DataFrame(columns=FIELD_NAMES)
         
-        # [핵심] 회원 데이터의 승인 여부 타입 일치화
+        # [핵심] 회원 데이터의 승인 여부 타입 일치화 (0, FALSE, False 모두 대응)
         if sheet_name == "Users":
             if not df.empty and 'approved' in df.columns:
                 df['approved'] = df['approved'].astype(str).str.upper()
@@ -259,7 +259,7 @@ def main_app():
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 탭 7: 관리자 페이지 (강화) ---
+    # --- 탭 7: 관리자 페이지 (승인 명단 미노출 해결) ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
@@ -286,12 +286,12 @@ def main_app():
             
             st.write("---")
             
-            # [해결] B. 회원 가입 승인 대기 명단
+            # [해결] B. 회원 가입 승인 대기 명단 (0, FALSE, False 모두 대응)
             u_df = load_data("Users")
             st.subheader("👥 회원 가입 승인 대기")
             if not u_df.empty:
-                # 시트의 FALSE 글자를 정확히 필터링
-                pending_users = u_df[u_df['approved'].astype(str).str.upper() == 'FALSE']
+                # approved 컬럼을 문자열로 변환하여 'TRUE'가 아닌 모든 대기 상태를 추출
+                pending_users = u_df[~u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 if not pending_users.empty:
                     for idx, row in pending_users.iterrows():
                         ca, cb, cc = st.columns([3, 1, 1])
@@ -330,7 +330,8 @@ def login_page():
                     user_match = users[(users['username'].astype(str) == str(u_name)) & 
                                        (users['password'].astype(str) == str(hashed_pw))]
                     if not user_match.empty:
-                        if str(user_match.iloc[0]['approved']).upper() == 'TRUE':
+                        # [해결] 1 또는 TRUE만 승인된 것으로 간주
+                        if str(user_match.iloc[0]['approved']).upper() in ['TRUE', '1', 'T']:
                             st.session_state.logged_in, st.session_state.username = True, u_name
                             st.rerun()
                         else:
