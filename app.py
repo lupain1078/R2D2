@@ -286,13 +286,13 @@ def main_app():
             
             st.write("---")
             
-            # [수정] 회원 관리 섹션 (데이터 즉시 갱신 추가)
+            # [기능 추가] 회원 관리 섹션
             u_df = load_data("Users")
             
             # B-1. 회원 가입 승인 대기 명단
             st.subheader("⏳ 회원 가입 승인 대기")
             if not u_df.empty:
-                # [해결] TRUE, 1, T가 아닌 모든 대기 상태 추출
+                # TRUE, 1, T가 아닌 모든 대기 상태 추출
                 pending_users = u_df[~u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 if not pending_users.empty:
                     for idx, row in pending_users.iterrows():
@@ -300,10 +300,10 @@ def main_app():
                         birth_val = row.get('birth', '정보없음')
                         ca.write(f"👤 **성명: {row['username']}** | 생년월일: {birth_val}")
                         if cb.button("✅ 최종 가입 승인", key=f"u_ok_{idx}"):
-                            u_df.at[idx, 'approved'] = 'TRUE'
-                            save_data(u_df, "Users") # 시트 저장
+                            u_df.at[idx, 'approved'] = 'TRUE' # 상태를 TRUE로 변경
+                            save_data(u_df, "Users") 
                             st.success(f"{row['username']}님 승인 완료")
-                            st.rerun() # [해결] 즉시 화면 갱신하여 회원 목록으로 이동시킴
+                            st.rerun() # 즉시 갱신하여 회원 목록으로 이동
                         if cc.button("❌ 가입 거절", key=f"u_no_{idx}"):
                             u_df = u_df.drop(idx)
                             save_data(u_df, "Users")
@@ -313,10 +313,10 @@ def main_app():
             
             st.write("---")
             
-            # B-2. 전체 회원 관리 (승인된 인원 목록 및 삭제)
+            # [기능 추가] B-2. 전체 회원 관리 (삭제 가능)
             st.subheader("👥 전체 회원 관리")
             if not u_df.empty:
-                # [해결] 데이터 로드를 최신화하여 승인된 사용자 추출
+                # 상태가 TRUE인 승인된 사용자만 추출
                 approved_users = u_df[u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 
                 if not approved_users.empty:
@@ -327,6 +327,7 @@ def main_app():
                     
                     st.write("---")
                     st.caption("❗ 관리가 필요한 회원을 삭제할 수 있습니다.")
+                    # 마스터 계정(admin)을 제외한 삭제 대상 목록 생성
                     manage_list = approved_users[approved_users['username'] != 'admin']['username'].tolist()
                     if manage_list:
                         del_target = st.selectbox("관리(삭제)할 회원 선택", manage_list)
@@ -350,7 +351,7 @@ def login_page():
             u_name = st.text_input("성명 (ID)")
             u_pw = st.text_input("비밀번호 (PW)", type="password")
             if st.form_submit_button("로그인"):
-                # [해결] 관리자 마스터 계정 강제 고정
+                # 관리자 마스터 계정 강제 고정
                 if u_name == "admin" and u_pw == "1234":
                     st.session_state.logged_in, st.session_state.username = True, u_name
                     st.rerun()
@@ -361,7 +362,7 @@ def login_page():
                     user_match = users[(users['username'].astype(str) == str(u_name)) & 
                                        (users['password'].astype(str) == str(hashed_pw))]
                     if not user_match.empty:
-                        # [해결] 1 또는 TRUE 대응
+                        # 승인 상태 체크
                         if str(user_match.iloc[0]['approved']).upper() in ['TRUE', '1', 'T']:
                             st.session_state.logged_in, st.session_state.username = True, u_name
                             st.rerun()
