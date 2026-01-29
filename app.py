@@ -251,88 +251,83 @@ def main_app():
                 st.rerun()
         else: st.info("대상 장비가 없습니다.")
 
-    # --- 탭 6: 내역 관리 ---
+    # --- 탭 6: 활동 내역 ---
     with tabs[5]:
         st.subheader("📜 활동 기록")
         st.dataframe(load_data("Logs").iloc[::-1], use_container_width=True)
 
-    # --- 탭 7: 관리자 페이지 (데이터 최신 동기화 적용) ---
+    # --- 탭 7: 관리자 페이지 (회원 승인 및 영구 삭제 기능) ---
     if is_admin:
         with tabs[6]:
             st.header("👑 관리자 페이지")
             
-            # A. 장비 삭제 승인
+            # A. 장비 삭제 승인 구역
             st.subheader("🗑️ 장비 삭제 요청 승인")
-            if '삭제요청' in st.session_state.df.columns:
-                del_req_df = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
-                if not del_req_df.empty:
-                    for idx, row in del_req_df.iterrows():
-                        col_a, col_b, col_c = st.columns([3, 1, 1])
-                        col_a.write(f"📂 **{row['이름']}** ({row['브랜드']}) | 수량: {row['수량']}")
-                        if col_b.button("✅ 삭제 승인", key=f"d_ok_{idx}"):
-                            st.session_state.df = st.session_state.df.drop(idx).reset_index(drop=True)
-                            save_data(st.session_state.df, "Sheet1")
-                            st.error("장비가 영구 삭제되었습니다.")
-                            st.rerun()
-                        if col_c.button("❌ 반려", key=f"d_no_{idx}"):
-                            st.session_state.df.at[idx, '삭제요청'] = ""
-                            save_data(st.session_state.df, "Sheet1")
-                            st.info("삭제 요청을 반려했습니다.")
-                            st.rerun()
-                else: st.info("현재 대기 중인 장비 삭제 요청이 없습니다.")
+            del_req_df = st.session_state.df[st.session_state.df['삭제요청'] == 'Y']
+            if not del_req_df.empty:
+                for idx, row in del_req_df.iterrows():
+                    col_a, col_b, col_c = st.columns([3, 1, 1])
+                    col_a.write(f"📂 **{row['이름']}** | 수량: {row['수량']}")
+                    if col_b.button("✅ 승인", key=f"d_ok_{idx}"):
+                        st.session_state.df = st.session_state.df.drop(idx).reset_index(drop=True)
+                        save_data(st.session_state.df, "Sheet1"); st.rerun()
+                    if col_c.button("❌ 반려", key=f"d_no_{idx}"):
+                        st.session_state.df.at[idx, '삭제요청'] = ""; save_data(st.session_state.df, "Sheet1"); st.rerun()
+            else: st.info("현재 대기 중인 장비 삭제 요청이 없습니다.")
             
             st.write("---")
             
+            # [기능 보강] 회원 관리 섹션 (동기화 로직 포함)
+            u_df = load_data("Users")
+            
             # B-1. 회원 가입 승인 대기 명단
             st.subheader("⏳ 회원 가입 승인 대기")
-            if not u_df_current.empty:
-                # [해결] TRUE, 1, T가 아닌 모든 대기 상태 추출
-                pending_users = u_df_current[~u_df_current['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
+            if not u_df.empty:
+                pending_users = u_df[~u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 if not pending_users.empty:
                     for idx, row in pending_users.iterrows():
                         ca, cb, cc = st.columns([3, 1, 1])
                         birth_val = row.get('birth', '정보없음')
                         ca.write(f"👤 **성명: {row['username']}** | 생년월일: {birth_val}")
                         if cb.button("✅ 최종 가입 승인", key=f"u_ok_{idx}"):
-                            # [해결 핵심] u_df_current 직접 수정 후 Users 시트에 즉시 저장
-                            u_df_current.at[idx, 'approved'] = 'TRUE'
-                            save_data(u_df_current, "Users") # 이 함수가 구글 시트 업데이트를 수행함
+                            u_df.at[idx, 'approved'] = 'TRUE' # 상태를 TRUE로 변경
+                            save_data(u_df, "Users") 
                             st.success(f"{row['username']}님 승인 완료")
-                            st.rerun() # 승인 직후 화면 전체를 새로고침하여 전체 회원 목록에 나타나게 함
+                            st.rerun() # 화면 갱신하여 아래 회원 관리 목록으로 이동
                         if cc.button("❌ 가입 거절", key=f"u_no_{idx}"):
-                            u_df_current = u_df_current.drop(idx)
-                            save_data(u_df_current, "Users")
-                            st.warning("신청 정보가 삭제되었습니다.")
-                            st.rerun()
+                            u_df = u_df.drop(idx)
+                            save_data(u_df, "Users"); st.rerun()
                 else: st.info("현재 대기 중인 가입 신청자가 없습니다.")
             
             st.write("---")
             
-            # B-2. 전체 회원 관리 (승인된 인원 목록 및 삭제)
+            # B-2. 전체 회원 관리 (퇴사 시 아이디 삭제 기능)
             st.subheader("👥 전체 회원 관리")
-            if not u_df_current.empty:
-                # [해결] 승인된 사용자(TRUE 상태)만 정확히 필터링하여 표시
-                approved_users = u_df_current[u_df_current['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
+            if not u_df.empty:
+                # 승인 완료된 사용자만 추출
+                approved_users = u_df[u_df['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 
                 if not approved_users.empty:
+                    # 표 형식으로 회원 명단 표시
                     display_users = approved_users[['username', 'birth', 'role', 'created_at']].copy()
                     display_users.columns = ['성명', '생년월일', '권한', '가입일']
                     st.dataframe(display_users, use_container_width=True, hide_index=True)
                     
                     st.write("---")
-                    st.caption("❗ 관리가 필요한 회원을 삭제할 수 있습니다.")
+                    st.caption("❗ 퇴사자 등의 계정을 영구 삭제할 수 있습니다.")
+                    # 삭제할 회원 선택 (마스터 admin 계정 제외)
                     manage_list = approved_users[approved_users['username'] != 'admin']['username'].tolist()
                     if manage_list:
-                        del_target = st.selectbox("관리(삭제)할 회원 선택", manage_list)
-                        if st.button("🔥 회원 계정 영구 삭제"):
-                            u_df_new = u_df_current[u_df_current['username'] != del_target]
-                            save_data(u_df_new, "Users")
+                        del_target = st.selectbox("삭제할 회원 계정 선택", manage_list)
+                        if st.button("🔥 해당 계정 즉시 삭제"):
+                            u_df = u_df[u_df['username'] != del_target]
+                            save_data(u_df, "Users") # 구글 시트에서 아이디 삭제
                             st.error(f"'{del_target}' 회원의 계정이 삭제되었습니다.")
                             st.rerun()
                     else:
                         st.info("삭제 가능한 일반 회원 계정이 없습니다.")
                 else:
-                    st.info("승인 완료된 회원이 없습니다.") #
+                    st.info("승인 완료된 회원이 없습니다.")
 
 # 4. 로그인 및 회원가입 페이지
 def login_page():
@@ -349,22 +344,22 @@ def login_page():
                 if not users.empty:
                     user_match = users[(users['username'].astype(str) == str(u_name)) & (users['password'].astype(str) == str(hashed_pw))]
                     if not user_match.empty:
+                        # 승인 여부 체크
                         if str(user_match.iloc[0]['approved']).upper() in ['TRUE', '1', 'T']:
                             st.session_state.logged_in, st.session_state.username = True, u_name; st.rerun()
                         else:
                             st.error("관리자의 가입 승인이 필요합니다.")
-                    else:
-                        st.error("성명 또는 비밀번호가 틀렸습니다.")
+                    else: st.error("정보 불일치")
     else:
         with st.form("signup"):
-            new_name, new_birth = st.text_input("성명 (실명 입력)"), st.date_input("생년월일", min_value=datetime(1950, 1, 1))
-            new_pass = st.text_input("비밀번호 설정", type="password")
-            if st.form_submit_button("가입 신청 완료"):
+            new_n, new_b = st.text_input("성명"), st.date_input("생년월일", min_value=datetime(1950, 1, 1))
+            new_p = st.text_input("비밀번호 설정", type="password")
+            if st.form_submit_button("신청 완료"):
                 users_db = load_data("Users")
-                hashed_new_pw = hashlib.sha256(new_pass.encode()).hexdigest()
-                new_user = {'username': new_name, 'birth': str(new_birth), 'password': hashed_new_pw, 'role': '사용자', 'approved': 'FALSE', 'created_at': datetime.now().strftime("%Y-%m-%d")}
+                hp = hashlib.sha256(new_p.encode()).hexdigest()
+                new_user = {'username': new_n, 'birth': str(new_b), 'password': hp, 'role': '사용자', 'approved': 'FALSE', 'created_at': datetime.now().strftime("%Y-%m-%d")}
                 save_data(pd.concat([users_db, pd.DataFrame([new_user])], ignore_index=True), "Users")
-                st.success("신청 완료! 관리자 승인을 기다려주세요.")
+                st.success("신청 완료! 승인 후 이용 가능합니다.")
 
 # 5. 앱 실행 제어부
 if __name__ == '__main__':
