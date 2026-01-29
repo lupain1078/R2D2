@@ -71,9 +71,9 @@ def to_excel(df_list, sheet_names):
 
 # 3. 메인 앱 실행 함수
 def main_app():
-    # [보완 추가] 앱 시작 시 장비 데이터 새로 로드
+    # 앱 시작 시 장비 데이터 새로 로드
     st.session_state.df = load_data("Sheet1")
-    # [보완 추가] 회원 관리 기능을 위해 매 실행 시마다 유저 데이터를 최신으로 동기화
+    # [핵심 보완] 회원 관리 기능을 위해 매 실행 시마다 유저 데이터를 최신으로 동기화
     u_df_current = load_data("Users")
     
     df = st.session_state.df
@@ -212,19 +212,15 @@ def main_app():
                     st.rerun()
         else: st.warning("출고 가능한 재고가 없습니다.")
 
-    # --- 탭 4: 반납 처리 (목록 미노출 해결) ---
+    # --- 탭 4: 반납 처리 ---
     with tabs[3]:
         st.subheader("📥 장비 반납 처리")
-        # [해결] 공백 제거 후 필터링하여 목록이 나타나게 함
         rented_items = st.session_state.df[st.session_state.df['대여여부'].isin(['대여 중', '현장 출고'])]
-        
         if not rented_items.empty:
             r_opts = rented_items.apply(lambda x: f"[{x['대여여부']}] {x['이름']} - {x['대여자']} ({int(x['수량'])}개)", axis=1)
             sel_ret = st.selectbox("반납 대상 선택", r_opts.index, format_func=lambda x: r_opts[x])
-            
             if st.button("반납 확정"):
                 item_ret = rented_items.loc[sel_ret]
-                # 원래 재고 항목을 찾아 수량을 합침
                 mask = (st.session_state.df['이름'] == item_ret['이름']) & (st.session_state.df['대여여부'] == '재고')
                 if any(mask):
                     idx_stock = st.session_state.df[mask].index[0]
@@ -233,7 +229,6 @@ def main_app():
                 else:
                     st.session_state.df.at[sel_ret, '대여여부'] = '재고'
                     st.session_state.df.at[sel_ret, '대여자'] = ''
-                
                 save_data(st.session_state.df, "Sheet1")
                 log_transaction("반납", item_ret['이름'], item_ret['수량'], item_ret['대여자'], datetime.now().strftime("%Y-%m-%d"))
                 st.success(f"'{item_ret['이름']}' 반납 완료")
@@ -288,7 +283,7 @@ def main_app():
             
             st.write("---")
             
-            # [보완 추가] B-1. 회원 가입 승인 대기 명단 (최신 u_df_current 사용)
+            # B-1. 회원 가입 승인 대기 명단
             st.subheader("⏳ 회원 가입 승인 대기")
             if not u_df_current.empty:
                 # [해결] TRUE, 1, T가 아닌 모든 대기 상태 추출
@@ -299,10 +294,11 @@ def main_app():
                         birth_val = row.get('birth', '정보없음')
                         ca.write(f"👤 **성명: {row['username']}** | 생년월일: {birth_val}")
                         if cb.button("✅ 최종 가입 승인", key=f"u_ok_{idx}"):
+                            # [해결 핵심] u_df_current 직접 수정 후 Users 시트에 즉시 저장
                             u_df_current.at[idx, 'approved'] = 'TRUE'
-                            save_data(u_df_current, "Users") 
+                            save_data(u_df_current, "Users") # 이 함수가 구글 시트 업데이트를 수행함
                             st.success(f"{row['username']}님 승인 완료")
-                            st.rerun() # 즉시 갱신
+                            st.rerun() # 승인 직후 화면 전체를 새로고침하여 전체 회원 목록에 나타나게 함
                         if cc.button("❌ 가입 거절", key=f"u_no_{idx}"):
                             u_df_current = u_df_current.drop(idx)
                             save_data(u_df_current, "Users")
@@ -312,14 +308,13 @@ def main_app():
             
             st.write("---")
             
-            # [보완 추가] B-2. 전체 회원 관리 (최신 u_df_current 사용)
+            # B-2. 전체 회원 관리 (승인된 인원 목록 및 삭제)
             st.subheader("👥 전체 회원 관리")
             if not u_df_current.empty:
-                # 승인된 사용자만 추출
+                # [해결] 승인된 사용자(TRUE 상태)만 정확히 필터링하여 표시
                 approved_users = u_df_current[u_df_current['approved'].astype(str).str.upper().isin(['TRUE', '1', 'T'])]
                 
                 if not approved_users.empty:
-                    # 표 형식으로 회원 명단 표시
                     display_users = approved_users[['username', 'birth', 'role', 'created_at']].copy()
                     display_users.columns = ['성명', '생년월일', '권한', '가입일']
                     st.dataframe(display_users, use_container_width=True, hide_index=True)
@@ -337,72 +332,42 @@ def main_app():
                     else:
                         st.info("삭제 가능한 일반 회원 계정이 없습니다.")
                 else:
-                    st.info("승인 완료된 회원이 없습니다.")
+                    st.info("승인 완료된 회원이 없습니다.") #
 
 # 4. 로그인 및 회원가입 페이지
 def login_page():
     st.title("🔒 통합 장비 관리 시스템")
     menu = st.radio("메뉴를 선택하세요", ["로그인", "회원가입"], horizontal=True)
-    
     if menu == "로그인":
         with st.form("login_form"):
-            u_name = st.text_input("성명 (ID)")
-            u_pw = st.text_input("비밀번호 (PW)", type="password")
+            u_name, u_pw = st.text_input("성명 (ID)"), st.text_input("비밀번호 (PW)", type="password")
             if st.form_submit_button("로그인"):
                 if u_name == "admin" and u_pw == "1234":
-                    st.session_state.logged_in, st.session_state.username = True, u_name
-                    st.rerun()
-                
+                    st.session_state.logged_in, st.session_state.username = True, u_name; st.rerun()
                 users = load_data("Users")
                 hashed_pw = hashlib.sha256(u_pw.encode()).hexdigest()
                 if not users.empty:
-                    user_match = users[(users['username'].astype(str) == str(u_name)) & 
-                                       (users['password'].astype(str) == str(hashed_pw))]
+                    user_match = users[(users['username'].astype(str) == str(u_name)) & (users['password'].astype(str) == str(hashed_pw))]
                     if not user_match.empty:
                         if str(user_match.iloc[0]['approved']).upper() in ['TRUE', '1', 'T']:
-                            st.session_state.logged_in, st.session_state.username = True, u_name
-                            st.rerun()
+                            st.session_state.logged_in, st.session_state.username = True, u_name; st.rerun()
                         else:
                             st.error("관리자의 가입 승인이 필요합니다.")
                     else:
                         st.error("성명 또는 비밀번호가 틀렸습니다.")
-                else:
-                    st.error("등록된 사용자가 없습니다. 먼저 회원가입을 해주세요.")
-                        
-    else: # 회원가입 신청
-        st.subheader("📝 신규 가입 신청 양식")
-        with st.form("signup_form"):
-            new_name = st.text_input("성명 (실명 입력)")
-            new_birth = st.date_input("생년월일", min_value=datetime(1950, 1, 1), max_value=datetime.now())
+    else:
+        with st.form("signup"):
+            new_name, new_birth = st.text_input("성명 (실명 입력)"), st.date_input("생년월일", min_value=datetime(1950, 1, 1))
             new_pass = st.text_input("비밀번호 설정", type="password")
-            st.caption("※ 신청 완료 후 관리자가 '👑 관리자 페이지'에서 승인하면 로그인이 가능합니다.")
-            
             if st.form_submit_button("가입 신청 완료"):
                 users_db = load_data("Users")
-                if not users_db.empty and new_name in users_db['username'].values:
-                    st.error("이미 등록된 성명입니다.")
-                elif not new_name or not new_pass:
-                    st.error("모든 항목을 입력해주세요.")
-                else:
-                    hashed_new_pw = hashlib.sha256(new_pass.encode()).hexdigest()
-                    new_user_info = {
-                        'username': new_name, 
-                        'birth': str(new_birth),
-                        'password': hashed_new_pw, 
-                        'role': '사용자', 
-                        'approved': 'FALSE', 
-                        'created_at': datetime.now().strftime("%Y-%m-%d")
-                    }
-                    users_db = pd.concat([users_db, pd.DataFrame([new_user_info])], ignore_index=True)
-                    save_data(users_db, "Users")
-                    st.success("신청이 완료되었습니다! 관리자 승인을 기다려주세요.")
+                hashed_new_pw = hashlib.sha256(new_pass.encode()).hexdigest()
+                new_user = {'username': new_name, 'birth': str(new_birth), 'password': hashed_new_pw, 'role': '사용자', 'approved': 'FALSE', 'created_at': datetime.now().strftime("%Y-%m-%d")}
+                save_data(pd.concat([users_db, pd.DataFrame([new_user])], ignore_index=True), "Users")
+                st.success("신청 완료! 관리자 승인을 기다려주세요.")
 
 # 5. 앱 실행 제어부
 if __name__ == '__main__':
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    
-    if st.session_state.logged_in:
-        main_app()
-    else:
-        login_page()
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if st.session_state.logged_in: main_app()
+    else: login_page()
